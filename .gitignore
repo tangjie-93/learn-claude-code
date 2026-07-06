@@ -55,6 +55,7 @@ cover/
 *.mo
 *.pot
 
+
 # Django stuff:
 *.log
 local_settings.py
@@ -232,3 +233,4 @@ test_providers.py
 # Internal analysis artifacts (not learning material)
 analysis/
 analysis_progress.md
+.npm-cache/*
