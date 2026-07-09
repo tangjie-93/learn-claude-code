@@ -129,6 +129,13 @@ cp .env.example .env
 python s01_agent_loop/code.py
 ```
 
+如果要使用 OpenAI 大模型，运行同目录下的 OpenAI 版本，核心循环逻辑不变：
+
+```sh
+# 编辑 .env，填入 OPENAI_API_KEY 和 OPENAI_MODEL
+python s01_agent_loop/code_openai.py
+```
+
 试试这些 prompt：
 
 1. `Create a file called hello.py that prints "Hello, World!"`
