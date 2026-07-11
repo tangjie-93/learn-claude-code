@@ -53,19 +53,20 @@ SYSTEM = f"You are a coding agent at {WORKDIR}. Use tools to solve tasks. Act, d
 # ═══════════════════════════════════════════════════════════
 
 def run_bash(command: str) -> str:
+    """在工作目录执行一条 Shell 命令，并返回合并后的输出或错误信息。"""
     dangerous = ["rm -rf /", "sudo", "shutdown", "reboot", "> /dev/"]
     if any(d in command for d in dangerous):
         return "Error: Dangerous command blocked"
     try:
         r = subprocess.run(
-            command,
-            shell=True,
-            cwd=WORKDIR,
-            capture_output=True,
-            text=True,
-            encoding="utf-8",
-            errors="replace",
-            timeout=120,
+            command,              # 要执行的命令字符串，例如 "ls -la"
+            shell=True,           # 交给 shell 解析，命令才能使用管道、重定向等 shell 语法
+            cwd=WORKDIR,          # 子进程的工作目录；相对路径以 WORKDIR 为基准
+            capture_output=True,  # 不直接打印到终端，把标准输出和标准错误保存到 r 中
+            text=True,            # 将输出解码为 str；不启用时会得到 bytes
+            encoding="utf-8",     # 按 UTF-8 解码输出，避免不同系统默认编码不一致
+            errors="replace",     # 遇到无法解码的字节时用替代字符表示，而不是抛出异常
+            timeout=120,          # 最长允许执行 120 秒；超时会抛出 TimeoutExpired
         )
         out = (r.stdout + r.stderr).strip()
         return out[:50000] if out else "(no output)"
@@ -76,13 +77,20 @@ def run_bash(command: str) -> str:
 
 
 def safe_path(p: str) -> Path:
+    """将用户路径限制在 WORKDIR 内，返回安全的规范化绝对路径。"""
+    # 将用户提供的相对路径拼到工作目录，并解析 .、.. 和符号链接，得到规范的绝对路径。
+    # resolve()：拼接 WORKDIR / p 后，消除 .、.. 并解析符号链接，得到真实绝对路径。
     path = (WORKDIR / p).resolve()
+    # 解析后仍必须在 WORKDIR 内，防止 "../" 或符号链接访问工作区外的文件。
+    # is_relative_to(WORKDIR)：确认真实路径仍在工作目录内。
     if not path.is_relative_to(WORKDIR):
+        # 不安全路径立即拒绝，调用方会把错误信息返回给模型或用户。
         raise ValueError(f"Path escapes workspace: {p}")
     return path
 
 
 def run_read(path: str, limit: int | None = None) -> str:
+    """读取工作目录内的文本文件；可选地限制返回的行数。"""
     try:
         lines = safe_path(path).read_text().splitlines()
         if limit and limit < len(lines):
@@ -93,9 +101,13 @@ def run_read(path: str, limit: int | None = None) -> str:
 
 
 def run_write(path: str, content: str) -> str:
+    """在工作目录内创建或覆盖文本文件，并自动创建缺失的父目录。"""
     try:
         file_path = safe_path(path)
+        # 确保目标文件的父目录存在；parents=True 会递归创建多层目录，exist_ok=True 允许目录已存在，已存在也不会报错。
+        # mkdir()：创建目录文件所在的目录。
         file_path.parent.mkdir(parents=True, exist_ok=True)
+        # 将 content 写入文件；文件已存在时会覆盖其原有内容，不存在时会新建。
         file_path.write_text(content)
         return f"Wrote {len(content)} bytes to {path}"
     except Exception as e:
@@ -103,11 +115,16 @@ def run_write(path: str, content: str) -> str:
 
 
 def run_edit(path: str, old_text: str, new_text: str) -> str:
+    """在工作目录内的文件中，将首次出现的旧文本替换为新文本。"""
     try:
         file_path = safe_path(path)
+        # 读取文件里的文件内容
         text = file_path.read_text()
+        # 等同于js的 !text.includes(oldText)
         if old_text not in text:
             return f"Error: text not found in {path}"
+        # 替换旧文本为新文本，只替换第一个匹配项
+        # replace()：返回一个新的字符串，其中所有旧文本的出现都被替换为新文本。
         file_path.write_text(text.replace(old_text, new_text, 1))
         return f"Edited {path}"
     except Exception as e:
@@ -115,11 +132,14 @@ def run_edit(path: str, old_text: str, new_text: str) -> str:
 
 
 def run_glob(pattern: str) -> str:
+    """按通配模式查找工作目录内的路径，并返回安全的相对路径列表。"""
     import glob as g
 
     try:
         results = []
+        # 按 pattern（如 "*.py" 或 "src/*.py"）搜索 WORKDIR；root_dir 让返回结果保持为相对路径。
         for match in g.glob(pattern, root_dir=WORKDIR):
+            # 每轮 match 是一个匹配到的路径，随后再确认它没有通过符号链接逃出工作目录。
             if (WORKDIR / match).resolve().is_relative_to(WORKDIR):
                 results.append(match)
         return "\n".join(results) if results else "(no matches)"
@@ -132,6 +152,7 @@ def run_glob(pattern: str) -> str:
 # ═══════════════════════════════════════════════════════════
 
 def function_tool(name: str, description: str, properties: dict[str, Any], required: list[str]) -> dict[str, Any]:
+    """根据名称、说明和参数 Schema，构造 OpenAI Responses API 的函数工具定义。"""
     return {
         "type": "function",
         "name": name,
@@ -200,6 +221,7 @@ TOOL_HANDLERS: dict[str, Callable[..., str]] = {
 # ═══════════════════════════════════════════════════════════
 
 def parse_arguments(raw: str) -> dict[str, Any]:
+    """将模型返回的 JSON 参数字符串解析为字典；失败时返回可回传的错误信息。"""
     try:
         parsed = json.loads(raw or "{}")
         return parsed if isinstance(parsed, dict) else {"_error": "Tool arguments must be a JSON object"}
@@ -208,12 +230,14 @@ def parse_arguments(raw: str) -> dict[str, Any]:
 
 
 def as_input_item(item: Any) -> Any:
+    """将 SDK 响应项转换为可作为下一轮 Responses API 输入的 JSON 风格数据。"""
     if hasattr(item, "model_dump"):
         return item.model_dump(exclude_unset=True, mode="json")
     return item
 
 
 def call_tool(name: str, args: dict[str, Any]) -> str:
+    """按工具名分发参数到处理函数，并将参数或调用错误转为文本结果。"""
     if "_error" in args:
         return args["_error"]
 
@@ -228,6 +252,7 @@ def call_tool(name: str, args: dict[str, Any]) -> str:
 
 
 def agent_loop(messages: list[dict[str, Any]]) -> Any:
+    """持续请求模型、执行其函数调用并回填结果，直到模型不再调用工具。"""
     while True:
         response = client.responses.create(
             model=MODEL,

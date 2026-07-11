@@ -80,8 +80,14 @@ def run_bash(command: str) -> str:
         # capture_output=True: 截获命令输出存到 r.stdout/r.stderr，代码才能拿到并处理
         # text=True: 输出自动解码为普通字符串（不加的话是 bytes，后面拼字符串会报错）
         # timeout=120: 最多等 120 秒，防止命令卡死
-        r = subprocess.run(command, shell=True, cwd=os.getcwd(),
-                           capture_output=True, text=True, timeout=120)
+        r = subprocess.run(
+            command,
+            shell=True, 
+            cwd=os.getcwd(),         
+            capture_output=True, 
+            text=True, 
+            timeout=120
+        )
         # 合并正常输出和错误输出，一起返回给模型
         out = (r.stdout + r.stderr).strip()
         # 输出太长会撑爆上下文，所以最多保留前 50000 个字符。
