@@ -139,6 +139,13 @@ cd learn-claude-code
 python s02_tool_use/code.py
 ```
 
+如果要使用 `OpenAI` / `ChatGPT` 模型，运行同目录下的 `OpenAI` 版本；工具逻辑和分发映射保持一致，只把接口换成 `Responses API` 的 `function_call` / `function_call_output`：
+
+```sh
+# 编辑 .env，填入 OPENAI_API_KEY 和 OPENAI_MODEL
+python s02_tool_use/code_openai.py
+```
+
 试试这些 prompt：
 
 1. `Read the file README.md and tell me what this project is about`
