@@ -5,8 +5,8 @@ s08_context_compact.py - Context Compact
 Four-layer compaction pipeline inserted before LLM calls:
 
     L1: snip_compact      — trim middle messages when count > 50
-    L2: micro_compact     — replace old tool_results with placeholders
-    L3: tool_result_budget — persist large results to disk
+    L2: micro_compact     — replace old function_call_outputs with placeholders
+    L3: function_call_output_budget — persist large results to disk
     L4: compact_history   — LLM full summary (1 API call)
 
     Emergency: reactive_compact — when API still returns prompt_too_long
@@ -42,7 +42,6 @@ except ImportError:
     pass
 
 from openai import OpenAI
-from types import SimpleNamespace
 from dotenv import load_dotenv
 
 load_dotenv(override=True)
@@ -54,91 +53,10 @@ TOOL_RESULTS_DIR = WORKDIR / ".task_outputs" / "tool-results"
 client = OpenAI(**client_kwargs)
 MODEL = os.getenv("OPENAI_MODEL", "gpt-5.5")
 
-# ═══════════════════════════════════════════════════════════
-#  OpenAI Responses API compatibility helpers
-#  Keep the chapter logic below unchanged: tools still return tool_use-like
-#  blocks to the loop, while this layer maps them to function_call internally.
-# ═══════════════════════════════════════════════════════════
+# OpenAI Responses API helpers
 
-def _block_type(block):
-    return block.get("type") if isinstance(block, dict) else getattr(block, "type", None)
-
-
-def _block_attr(block, name, default=None):
-    return block.get(name, default) if isinstance(block, dict) else getattr(block, name, default)
-
-
-def _json_arguments(value) -> str:
-    if isinstance(value, str):
-        return value
-    return json.dumps(value or {}, ensure_ascii=False)
-
-
-def _to_openai_input(messages: list) -> list:
-    converted = []
-    for msg in messages:
-        role = msg.get("role", "user")
-        content = msg.get("content", "")
-
-        if isinstance(content, str):
-            converted.append({"role": role, "content": content})
-            continue
-        if not isinstance(content, list):
-            converted.append({"role": role, "content": str(content)})
-            continue
-
-        text_parts = []
-        for block in content:
-            kind = _block_type(block)
-            if kind == "text":
-                text = _block_attr(block, "text", "")
-                if text:
-                    text_parts.append(str(text))
-            elif kind == "tool_use":
-                if text_parts:
-                    converted.append({"role": "assistant", "content": "\n".join(text_parts)})
-                    text_parts = []
-                converted.append({
-                    "type": "function_call",
-                    "call_id": _block_attr(block, "id"),
-                    "name": _block_attr(block, "name"),
-                    "arguments": _json_arguments(_block_attr(block, "input", {})),
-                })
-            elif kind == "tool_result":
-                if text_parts:
-                    converted.append({"role": role, "content": "\n".join(text_parts)})
-                    text_parts = []
-                converted.append({
-                    "type": "function_call_output",
-                    "call_id": _block_attr(block, "tool_use_id"),
-                    "output": str(_block_attr(block, "content", "")),
-                })
-
-        if text_parts:
-            converted.append({"role": role, "content": "\n".join(text_parts)})
-    return converted
-
-
-def _to_openai_tools(tools: list | None) -> list | None:
-    if not tools:
-        return None
-    converted = []
-    for tool in tools:
-        if tool.get("type") == "function":
-            converted.append(tool)
-            continue
-        schema = dict(tool.get("input_schema") or tool.get("parameters") or {"type": "object"})
-        schema.setdefault("type", "object")
-        converted.append({
-            "type": "function",
-            "name": tool["name"],
-            "description": tool.get("description", ""),
-            "parameters": schema,
-        })
-    return converted
-
-
-def _parse_arguments(raw) -> dict:
+def parse_arguments(raw) -> dict:
+    """Parse a native Responses API function-call argument string."""
     try:
         parsed = json.loads(raw or "{}") if isinstance(raw, str) else raw
         return parsed if isinstance(parsed, dict) else {}
@@ -146,47 +64,15 @@ def _parse_arguments(raw) -> dict:
         return {}
 
 
-def _from_openai_response(response):
-    content = []
-    for item in getattr(response, "output", []) or []:
-        kind = getattr(item, "type", None)
-        if kind == "function_call":
-            call_id = getattr(item, "call_id", None) or getattr(item, "id", None)
-            content.append(SimpleNamespace(
-                type="tool_use",
-                id=str(call_id),
-                name=getattr(item, "name", ""),
-                input=_parse_arguments(getattr(item, "arguments", "{}")),
-            ))
-        elif kind == "message":
-            for part in getattr(item, "content", []) or []:
-                if getattr(part, "type", None) == "output_text":
-                    text = getattr(part, "text", "")
-                    if text:
-                        content.append(SimpleNamespace(type="text", text=text))
-
-    if not content and getattr(response, "output_text", ""):
-        content.append(SimpleNamespace(type="text", text=response.output_text))
-
-    stop_reason = "tool_use" if any(getattr(block, "type", None) == "tool_use" for block in content) else "end_turn"
-    incomplete = getattr(response, "incomplete_details", None)
-    if getattr(response, "status", None) == "incomplete" and getattr(incomplete, "reason", None) == "max_output_tokens":
-        stop_reason = "max_tokens"
-    return SimpleNamespace(content=content, stop_reason=stop_reason)
+def function_calls(response):
+    """Return the native function_call output items from a response."""
+    return [item for item in response.output if getattr(item, "type", None) == "function_call"]
 
 
-def openai_messages_create(*, model: str | None = None, system: str = "", messages: list | None = None,
-                           tools: list | None = None, max_tokens: int = 8000, **_):
-    request = {
-        "model": model or MODEL,
-        "instructions": system or "",
-        "input": _to_openai_input(messages or []),
-        "max_output_tokens": max_tokens,
-    }
-    openai_tools = _to_openai_tools(tools)
-    if openai_tools:
-        request["tools"] = openai_tools
-    return _from_openai_response(client.responses.create(**request))
+def call_args(call) -> dict:
+    """Return a function call's parsed arguments."""
+    return parse_arguments(call.arguments)
+
 
 CURRENT_TODOS: list[dict] = []
 
@@ -343,16 +229,16 @@ def extract_text(content) -> str:
 # ═══════════════════════════════════════════════════════════
 
 SUB_TOOLS = [
-    {"name": "bash", "description": "Run a shell command.",
-     "input_schema": {"type": "object", "properties": {"command": {"type": "string"}}, "required": ["command"]}},
-    {"name": "read_file", "description": "Read file contents.",
-     "input_schema": {"type": "object", "properties": {"path": {"type": "string"}}, "required": ["path"]}},
-    {"name": "write_file", "description": "Write content to a file.",
-     "input_schema": {"type": "object", "properties": {"path": {"type": "string"}, "content": {"type": "string"}}, "required": ["path", "content"]}},
-    {"name": "edit_file", "description": "Replace exact text in a file once.",
-     "input_schema": {"type": "object", "properties": {"path": {"type": "string"}, "old_text": {"type": "string"}, "new_text": {"type": "string"}}, "required": ["path", "old_text", "new_text"]}},
-    {"name": "glob", "description": "Find files matching a glob pattern.",
-     "input_schema": {"type": "object", "properties": {"pattern": {"type": "string"}}, "required": ["pattern"]}},
+    {"type": "function", "name": "bash", "description": "Run a shell command.",
+     "parameters": {"type": "object", "properties": {"command": {"type": "string"}}, "required": ["command"]}},
+    {"type": "function", "name": "read_file", "description": "Read file contents.",
+     "parameters": {"type": "object", "properties": {"path": {"type": "string"}}, "required": ["path"]}},
+    {"type": "function", "name": "write_file", "description": "Write content to a file.",
+     "parameters": {"type": "object", "properties": {"path": {"type": "string"}, "content": {"type": "string"}}, "required": ["path", "content"]}},
+    {"type": "function", "name": "edit_file", "description": "Replace exact text in a file once.",
+     "parameters": {"type": "object", "properties": {"path": {"type": "string"}, "old_text": {"type": "string"}, "new_text": {"type": "string"}}, "required": ["path", "old_text", "new_text"]}},
+    {"type": "function", "name": "glob", "description": "Find files matching a glob pattern.",
+     "parameters": {"type": "object", "properties": {"pattern": {"type": "string"}}, "required": ["pattern"]}},
 ]
 SUB_HANDLERS = {"bash": run_bash, "read_file": run_read, "write_file": run_write,
                 "edit_file": run_edit, "glob": run_glob}
@@ -361,26 +247,26 @@ def spawn_subagent(description: str) -> str:
     print(f"\n\033[35m[Subagent spawned]\033[0m")
     messages = [{"role": "user", "content": description}]
     for _ in range(30):
-        response = openai_messages_create(model=MODEL, system=SUB_SYSTEM,
-            messages=messages, tools=SUB_TOOLS, max_tokens=8000)
-        messages.append({"role": "assistant", "content": response.content})
-        if response.stop_reason != "tool_use":
+        response = client.responses.create(model=MODEL, instructions=SUB_SYSTEM,
+            input=messages, tools=SUB_TOOLS, max_output_tokens=8000)
+        messages.extend(response.output)
+        if not function_calls(response):
             break
         results = []
-        for block in response.content:
-            if block.type == "tool_use":
+        for block in function_calls(response):
+            if block.type == "function_call":
                 blocked = trigger_hooks("PreToolUse", block)
                 if blocked:
-                    results.append({"type": "tool_result", "tool_use_id": block.id,
-                                    "content": str(blocked)})
+                    results.append({"type": "function_call_output", "call_id": block.call_id,
+                                    "output": str(blocked)})
                     continue
                 handler = SUB_HANDLERS.get(block.name)
-                output = handler(**block.input) if handler else f"Unknown: {block.name}"
+                output = handler(**call_args(block)) if handler else f"Unknown: {block.name}"
                 trigger_hooks("PostToolUse", block, output)
                 print(f"  \033[90m[sub] {block.name}: {str(output)[:100]}\033[0m")
-                results.append({"type": "tool_result", "tool_use_id": block.id, "content": output})
-        messages.append({"role": "user", "content": results})
-    result = extract_text(messages[-1]["content"])
+                results.append({"type": "function_call_output", "call_id": block.call_id, "output": output})
+        messages.extend(results)
+    result = response.output_text
     if not result:
         for msg in reversed(messages):
             if msg["role"] == "assistant":
@@ -407,36 +293,36 @@ def _block_type(block):
     return block.get("type") if isinstance(block, dict) else getattr(block, "type", None)
 
 
-def _message_has_tool_use(msg):
+def _message_has_function_call(msg):
     if msg.get("role") != "assistant":
         return False
     content = msg.get("content")
     if not isinstance(content, list):
         return False
-    return any(_block_type(block) == "tool_use" for block in content)
+    return any(_block_type(block) == "function_call" for block in content)
 
 
-def _is_tool_result_message(msg):
+def _is_function_call_output_message(msg):
     if msg.get("role") != "user":
         return False
     content = msg.get("content")
     if not isinstance(content, list):
         return False
-    return any(isinstance(block, dict) and block.get("type") == "tool_result"
+    return any(isinstance(block, dict) and block.get("type") == "function_call_output"
                for block in content)
 
 
 # L1: snipCompact — trim middle messages
-def snip_compact(messages, max_messages=50):
+def snip_compact(messages, max_input=50):
     if len(messages) <= max_messages: return messages
     keep_head, keep_tail = 3, max_messages - 3
     head_end, tail_start = keep_head, len(messages) - keep_tail
-    if head_end > 0 and _message_has_tool_use(messages[head_end - 1]):
-        while head_end < len(messages) and _is_tool_result_message(messages[head_end]):
+    if head_end > 0 and _message_has_function_call(messages[head_end - 1]):
+        while head_end < len(messages) and _is_function_call_output_message(messages[head_end]):
             head_end += 1
     if (tail_start > 0 and tail_start < len(messages)
-            and _is_tool_result_message(messages[tail_start])
-            and _message_has_tool_use(messages[tail_start - 1])):
+            and _is_function_call_output_message(messages[tail_start])
+            and _message_has_function_call(messages[tail_start - 1])):
         tail_start -= 1
     if head_end >= tail_start:
         return messages
@@ -445,36 +331,36 @@ def snip_compact(messages, max_messages=50):
 
 
 # L2: microCompact — old result placeholders
-def collect_tool_results(messages):
+def collect_function_call_outputs(messages):
     blocks = []
     for mi, msg in enumerate(messages):
         if msg.get("role") != "user" or not isinstance(msg.get("content"), list): continue
         for bi, block in enumerate(msg["content"]):
-            if isinstance(block, dict) and block.get("type") == "tool_result":
+            if isinstance(block, dict) and block.get("type") == "function_call_output":
                 blocks.append((mi, bi, block))
     return blocks
 
 def micro_compact(messages):
-    tool_results = collect_tool_results(messages)
-    if len(tool_results) <= KEEP_RECENT: return messages
-    for _, _, block in tool_results[:-KEEP_RECENT]:
+    function_call_outputs = collect_function_call_outputs(messages)
+    if len(function_call_outputs) <= KEEP_RECENT: return messages
+    for _, _, block in function_call_outputs[:-KEEP_RECENT]:
         if len(block.get("content", "")) > 120:
             block["content"] = "[Earlier tool result compacted. Re-run if needed.]"
     return messages
 
 
 # L3: toolResultBudget — persist large results to disk
-def persist_large_output(tool_use_id, output):
+def persist_large_output(call_id, output):
     if len(output) <= PERSIST_THRESHOLD: return output
     TOOL_RESULTS_DIR.mkdir(parents=True, exist_ok=True)
-    path = TOOL_RESULTS_DIR / f"{tool_use_id}.txt"
+    path = TOOL_RESULTS_DIR / f"{call_id}.txt"
     if not path.exists(): path.write_text(output)
     return f"<persisted-output>\nFull output: {path}\nPreview:\n{output[:2000]}\n</persisted-output>"
 
-def tool_result_budget(messages, max_bytes=200_000):
+def function_call_output_budget(messages, max_bytes=200_000):
     last = messages[-1] if messages else None
     if not last or last.get("role") != "user" or not isinstance(last.get("content"), list): return messages
-    blocks = [(i, b) for i, b in enumerate(last["content"]) if isinstance(b, dict) and b.get("type") == "tool_result"]
+    blocks = [(i, b) for i, b in enumerate(last["content"]) if isinstance(b, dict) and b.get("type") == "function_call_output"]
     total = sum(len(str(b.get("content", ""))) for _, b in blocks)
     if total <= max_bytes: return messages
     ranked = sorted(blocks, key=lambda p: len(str(p[1].get("content", ""))), reverse=True)
@@ -482,7 +368,7 @@ def tool_result_budget(messages, max_bytes=200_000):
         if total <= max_bytes: break
         content = str(block.get("content", ""))
         if len(content) <= PERSIST_THRESHOLD: continue
-        tid = block.get("tool_use_id", "unknown")
+        tid = block.get("call_id", "unknown")
         block["content"] = persist_large_output(tid, content)
         total = sum(len(str(b.get("content", ""))) for _, b in blocks)
     return messages
@@ -501,10 +387,10 @@ def summarize_history(messages):
     prompt = ("Summarize this coding-agent conversation so work can continue.\n"
               "Preserve: 1. current goal, 2. key findings/decisions, 3. files read/changed, "
               "4. remaining work, 5. user constraints.\nBe compact but concrete.\n\n" + conversation)
-    response = openai_messages_create(model=MODEL, messages=[{"role": "user", "content": prompt}], max_tokens=2000)
+    response = client.responses.create(model=MODEL, input=[{"role": "user", "content": prompt}], max_output_tokens=2000)
     return "\n".join(
         getattr(block, "text", "")
-        for block in response.content
+        for block in response.output
         if getattr(block, "type", None) == "text").strip() or "(empty summary)"
 
 def compact_history(messages):
@@ -519,8 +405,8 @@ def reactive_compact(messages):
     transcript = write_transcript(messages)
     tail_start = max(0, len(messages) - 5)
     if (tail_start > 0 and tail_start < len(messages)
-            and _is_tool_result_message(messages[tail_start])
-            and _message_has_tool_use(messages[tail_start - 1])):
+            and _is_function_call_output_message(messages[tail_start])
+            and _message_has_function_call(messages[tail_start - 1])):
         tail_start -= 1
     summary = summarize_history(messages[:tail_start])
     return [{"role": "user", "content": f"[Reactive compact]\n\n{summary}"}, *messages[tail_start:]]
@@ -531,25 +417,25 @@ def reactive_compact(messages):
 # ═══════════════════════════════════════════════════════════
 
 TOOLS = [
-    {"name": "bash", "description": "Run a shell command.",
-     "input_schema": {"type": "object", "properties": {"command": {"type": "string"}}, "required": ["command"]}},
-    {"name": "read_file", "description": "Read file contents.",
-     "input_schema": {"type": "object", "properties": {"path": {"type": "string"}, "limit": {"type": "integer"}}, "required": ["path"]}},
-    {"name": "write_file", "description": "Write content to a file.",
-     "input_schema": {"type": "object", "properties": {"path": {"type": "string"}, "content": {"type": "string"}}, "required": ["path", "content"]}},
-    {"name": "edit_file", "description": "Replace exact text in a file once.",
-     "input_schema": {"type": "object", "properties": {"path": {"type": "string"}, "old_text": {"type": "string"}, "new_text": {"type": "string"}}, "required": ["path", "old_text", "new_text"]}},
-    {"name": "glob", "description": "Find files matching a glob pattern.",
-     "input_schema": {"type": "object", "properties": {"pattern": {"type": "string"}}, "required": ["pattern"]}},
-    {"name": "todo_write", "description": "Create and manage a task list for your current coding session.",
-     "input_schema": {"type": "object", "properties": {"todos": {"type": "array", "items": {"type": "object", "properties": {"content": {"type": "string"}, "status": {"type": "string", "enum": ["pending", "in_progress", "completed"]}}, "required": ["content", "status"]}}}, "required": ["todos"]}},
-    {"name": "task", "description": "Launch a subagent to handle a complex subtask. Returns only the final conclusion.",
-     "input_schema": {"type": "object", "properties": {"description": {"type": "string"}}, "required": ["description"]}},
-    {"name": "load_skill", "description": "Load the full content of a skill by name.",
-     "input_schema": {"type": "object", "properties": {"name": {"type": "string"}}, "required": ["name"]}},
+    {"type": "function", "name": "bash", "description": "Run a shell command.",
+     "parameters": {"type": "object", "properties": {"command": {"type": "string"}}, "required": ["command"]}},
+    {"type": "function", "name": "read_file", "description": "Read file contents.",
+     "parameters": {"type": "object", "properties": {"path": {"type": "string"}, "limit": {"type": "integer"}}, "required": ["path"]}},
+    {"type": "function", "name": "write_file", "description": "Write content to a file.",
+     "parameters": {"type": "object", "properties": {"path": {"type": "string"}, "content": {"type": "string"}}, "required": ["path", "content"]}},
+    {"type": "function", "name": "edit_file", "description": "Replace exact text in a file once.",
+     "parameters": {"type": "object", "properties": {"path": {"type": "string"}, "old_text": {"type": "string"}, "new_text": {"type": "string"}}, "required": ["path", "old_text", "new_text"]}},
+    {"type": "function", "name": "glob", "description": "Find files matching a glob pattern.",
+     "parameters": {"type": "object", "properties": {"pattern": {"type": "string"}}, "required": ["pattern"]}},
+    {"type": "function", "name": "todo_write", "description": "Create and manage a task list for your current coding session.",
+     "parameters": {"type": "object", "properties": {"todos": {"type": "array", "items": {"type": "object", "properties": {"content": {"type": "string"}, "status": {"type": "string", "enum": ["pending", "in_progress", "completed"]}}, "required": ["content", "status"]}}}, "required": ["todos"]}},
+    {"type": "function", "name": "task", "description": "Launch a subagent to handle a complex subtask. Returns only the final conclusion.",
+     "parameters": {"type": "object", "properties": {"description": {"type": "string"}}, "required": ["description"]}},
+    {"type": "function", "name": "load_skill", "description": "Load the full content of a skill by name.",
+     "parameters": {"type": "object", "properties": {"name": {"type": "string"}}, "required": ["name"]}},
     # s08 change: new compact tool — triggers compact_history, not a no-op
-    {"name": "compact", "description": "Summarize earlier conversation to free context space.",
-     "input_schema": {"type": "object", "properties": {"focus": {"type": "string"}}}},
+    {"type": "function", "name": "compact", "description": "Summarize earlier conversation to free context space.",
+     "parameters": {"type": "object", "properties": {"focus": {"type": "string"}}}},
 ]
 
 TOOL_HANDLERS = {
@@ -570,7 +456,7 @@ DENY_LIST = ["rm -rf /", "sudo", "shutdown"]
 def permission_hook(block):
     if block.name == "bash":
         for p in DENY_LIST:
-            if p in block.input.get("command", ""): return "Permission denied"
+            if p in call_args(block).get("command", ""): return "Permission denied"
     return None
 def log_hook(block):
     print(f"\033[90m[HOOK] {block.name}\033[0m")
@@ -591,7 +477,7 @@ def agent_loop(messages: list):
     while True:
         # s08 change: three preprocessors (0 API calls, cheap first)
         # Order matches CC source: budget → snip → micro
-        messages[:] = tool_result_budget(messages)    # L3: persist large results first
+        messages[:] = function_call_output_budget(messages)    # L3: persist large results first
         messages[:] = snip_compact(messages)          # L1: trim middle
         messages[:] = micro_compact(messages)         # L2: old result placeholders
 
@@ -601,7 +487,7 @@ def agent_loop(messages: list):
             messages[:] = compact_history(messages)
 
         try:
-            response = openai_messages_create(model=MODEL, system=SYSTEM, messages=messages, tools=TOOLS, max_tokens=8000)
+            response = client.responses.create(model=MODEL, instructions=SYSTEM, input=messages, tools=TOOLS, max_output_tokens=8000)
             reactive_retries = 0  # reset on successful API call
         except Exception as e:
             if ("prompt_too_long" in str(e).lower() or "too many tokens" in str(e).lower()) and reactive_retries < MAX_REACTIVE_RETRIES:
@@ -611,34 +497,34 @@ def agent_loop(messages: list):
                 continue
             raise
 
-        messages.append({"role": "assistant", "content": response.content})
-        if response.stop_reason != "tool_use": return
+        messages.extend(response.output)
+        if not function_calls(response): return
 
         results = []
-        for block in response.content:
-            if block.type != "tool_use": continue
+        for block in function_calls(response):
+            if block.type != "function_call": continue
             print(f"\033[36m> {block.name}\033[0m")
 
             # s08: compact tool triggers compact_history, not a no-op string
             if block.name == "compact":
                 messages[:] = compact_history(messages)
-                results.append({"type": "tool_result", "tool_use_id": block.id,
-                                "content": "[Compacted. Conversation history has been summarized.]"})
-                messages.append({"role": "user", "content": results})
+                results.append({"type": "function_call_output", "call_id": block.call_id,
+                                "output": "[Compacted. Conversation history has been summarized.]"})
+                messages.extend(results)
                 break  # end current turn, start fresh with compacted context
 
             blocked = trigger_hooks("PreToolUse", block)
             if blocked:
-                results.append({"type": "tool_result", "tool_use_id": block.id, "content": str(blocked)})
+                results.append({"type": "function_call_output", "call_id": block.call_id, "output": str(blocked)})
                 continue
             handler = TOOL_HANDLERS.get(block.name)
-            output = handler(**block.input) if handler else f"Unknown: {block.name}"
+            output = handler(**call_args(block)) if handler else f"Unknown: {block.name}"
             trigger_hooks("PostToolUse", block, output)
             print(str(output)[:200])
-            results.append({"type": "tool_result", "tool_use_id": block.id, "content": str(output)})
+            results.append({"type": "function_call_output", "call_id": block.call_id, "output": str(output)})
         else:
             # normal path: no compact was called
-            messages.append({"role": "user", "content": results})
+            messages.extend(results)
             continue
         # compact was called: results already appended above
         continue

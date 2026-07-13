@@ -31,7 +31,6 @@ except ImportError:
     pass
 
 from openai import OpenAI
-from types import SimpleNamespace
 from dotenv import load_dotenv
 
 load_dotenv(override=True)
@@ -45,91 +44,10 @@ MEMORY_INDEX = MEMORY_DIR / "MEMORY.md"
 client = OpenAI(**client_kwargs)
 MODEL = os.getenv("OPENAI_MODEL", "gpt-5.5")
 
-# ═══════════════════════════════════════════════════════════
-#  OpenAI Responses API compatibility helpers
-#  Keep the chapter logic below unchanged: tools still return tool_use-like
-#  blocks to the loop, while this layer maps them to function_call internally.
-# ═══════════════════════════════════════════════════════════
+# OpenAI Responses API helpers
 
-def _block_type(block):
-    return block.get("type") if isinstance(block, dict) else getattr(block, "type", None)
-
-
-def _block_attr(block, name, default=None):
-    return block.get(name, default) if isinstance(block, dict) else getattr(block, name, default)
-
-
-def _json_arguments(value) -> str:
-    if isinstance(value, str):
-        return value
-    return json.dumps(value or {}, ensure_ascii=False)
-
-
-def _to_openai_input(messages: list) -> list:
-    converted = []
-    for msg in messages:
-        role = msg.get("role", "user")
-        content = msg.get("content", "")
-
-        if isinstance(content, str):
-            converted.append({"role": role, "content": content})
-            continue
-        if not isinstance(content, list):
-            converted.append({"role": role, "content": str(content)})
-            continue
-
-        text_parts = []
-        for block in content:
-            kind = _block_type(block)
-            if kind == "text":
-                text = _block_attr(block, "text", "")
-                if text:
-                    text_parts.append(str(text))
-            elif kind == "tool_use":
-                if text_parts:
-                    converted.append({"role": "assistant", "content": "\n".join(text_parts)})
-                    text_parts = []
-                converted.append({
-                    "type": "function_call",
-                    "call_id": _block_attr(block, "id"),
-                    "name": _block_attr(block, "name"),
-                    "arguments": _json_arguments(_block_attr(block, "input", {})),
-                })
-            elif kind == "tool_result":
-                if text_parts:
-                    converted.append({"role": role, "content": "\n".join(text_parts)})
-                    text_parts = []
-                converted.append({
-                    "type": "function_call_output",
-                    "call_id": _block_attr(block, "tool_use_id"),
-                    "output": str(_block_attr(block, "content", "")),
-                })
-
-        if text_parts:
-            converted.append({"role": role, "content": "\n".join(text_parts)})
-    return converted
-
-
-def _to_openai_tools(tools: list | None) -> list | None:
-    if not tools:
-        return None
-    converted = []
-    for tool in tools:
-        if tool.get("type") == "function":
-            converted.append(tool)
-            continue
-        schema = dict(tool.get("input_schema") or tool.get("parameters") or {"type": "object"})
-        schema.setdefault("type", "object")
-        converted.append({
-            "type": "function",
-            "name": tool["name"],
-            "description": tool.get("description", ""),
-            "parameters": schema,
-        })
-    return converted
-
-
-def _parse_arguments(raw) -> dict:
+def parse_arguments(raw) -> dict:
+    """Parse a native Responses API function-call argument string."""
     try:
         parsed = json.loads(raw or "{}") if isinstance(raw, str) else raw
         return parsed if isinstance(parsed, dict) else {}
@@ -137,47 +55,15 @@ def _parse_arguments(raw) -> dict:
         return {}
 
 
-def _from_openai_response(response):
-    content = []
-    for item in getattr(response, "output", []) or []:
-        kind = getattr(item, "type", None)
-        if kind == "function_call":
-            call_id = getattr(item, "call_id", None) or getattr(item, "id", None)
-            content.append(SimpleNamespace(
-                type="tool_use",
-                id=str(call_id),
-                name=getattr(item, "name", ""),
-                input=_parse_arguments(getattr(item, "arguments", "{}")),
-            ))
-        elif kind == "message":
-            for part in getattr(item, "content", []) or []:
-                if getattr(part, "type", None) == "output_text":
-                    text = getattr(part, "text", "")
-                    if text:
-                        content.append(SimpleNamespace(type="text", text=text))
-
-    if not content and getattr(response, "output_text", ""):
-        content.append(SimpleNamespace(type="text", text=response.output_text))
-
-    stop_reason = "tool_use" if any(getattr(block, "type", None) == "tool_use" for block in content) else "end_turn"
-    incomplete = getattr(response, "incomplete_details", None)
-    if getattr(response, "status", None) == "incomplete" and getattr(incomplete, "reason", None) == "max_output_tokens":
-        stop_reason = "max_tokens"
-    return SimpleNamespace(content=content, stop_reason=stop_reason)
+def function_calls(response):
+    """Return the native function_call output items from a response."""
+    return [item for item in response.output if getattr(item, "type", None) == "function_call"]
 
 
-def openai_messages_create(*, model: str | None = None, system: str = "", messages: list | None = None,
-                           tools: list | None = None, max_tokens: int = 8000, **_):
-    request = {
-        "model": model or MODEL,
-        "instructions": system or "",
-        "input": _to_openai_input(messages or []),
-        "max_output_tokens": max_tokens,
-    }
-    openai_tools = _to_openai_tools(tools)
-    if openai_tools:
-        request["tools"] = openai_tools
-    return _from_openai_response(client.responses.create(**request))
+def call_args(call) -> dict:
+    """Return a function call's parsed arguments."""
+    return parse_arguments(call.arguments)
+
 
 
 # ── Task System ──
@@ -390,46 +276,46 @@ def run_complete_task(task_id: str) -> str:
 
 
 TOOLS = [
-    {"name": "bash", "description": "Run a shell command.",
-     "input_schema": {"type": "object",
+    {"type": "function", "name": "bash", "description": "Run a shell command.",
+     "parameters": {"type": "object",
                       "properties": {"command": {"type": "string"}},
                       "required": ["command"]}},
-    {"name": "read_file", "description": "Read file contents.",
-     "input_schema": {"type": "object",
+    {"type": "function", "name": "read_file", "description": "Read file contents.",
+     "parameters": {"type": "object",
                       "properties": {"path": {"type": "string"},
                                      "limit": {"type": "integer"}},
                       "required": ["path"]}},
-    {"name": "write_file", "description": "Write content to a file.",
-     "input_schema": {"type": "object",
+    {"type": "function", "name": "write_file", "description": "Write content to a file.",
+     "parameters": {"type": "object",
                       "properties": {"path": {"type": "string"},
                                      "content": {"type": "string"}},
                       "required": ["path", "content"]}},
-    {"name": "create_task",
+    {"type": "function", "name": "create_task",
      "description": "Create a new task with optional blockedBy dependencies.",
-     "input_schema": {"type": "object",
+     "parameters": {"type": "object",
                       "properties": {
                           "subject": {"type": "string"},
                           "description": {"type": "string"},
                           "blockedBy": {"type": "array",
                                         "items": {"type": "string"}}},
                       "required": ["subject"]}},
-    {"name": "list_tasks",
+    {"type": "function", "name": "list_tasks",
      "description": "List all tasks with status, owner, and dependencies.",
-     "input_schema": {"type": "object", "properties": {},
+     "parameters": {"type": "object", "properties": {},
                       "required": []}},
-    {"name": "get_task",
+    {"type": "function", "name": "get_task",
      "description": "Get full details of a specific task by ID.",
-     "input_schema": {"type": "object",
+     "parameters": {"type": "object",
                       "properties": {"task_id": {"type": "string"}},
                       "required": ["task_id"]}},
-    {"name": "claim_task",
+    {"type": "function", "name": "claim_task",
      "description": "Claim a pending task. Sets owner, changes status to in_progress.",
-     "input_schema": {"type": "object",
+     "parameters": {"type": "object",
                       "properties": {"task_id": {"type": "string"}},
                       "required": ["task_id"]}},
-    {"name": "complete_task",
+    {"type": "function", "name": "complete_task",
      "description": "Complete an in-progress task. Reports unblocked downstream tasks.",
-     "input_schema": {"type": "object",
+     "parameters": {"type": "object",
                       "properties": {"task_id": {"type": "string"}},
                       "required": ["task_id"]}},
 ]
@@ -464,30 +350,30 @@ def agent_loop(messages: list, context: dict):
     system = get_system_prompt(context)
     while True:
         try:
-            response = openai_messages_create(
-                model=MODEL, system=system, messages=messages,
-                tools=TOOLS, max_tokens=8000)
+            response = client.responses.create(
+                model=MODEL, instructions=system, input=messages,
+                tools=TOOLS, max_output_tokens=8000)
         except Exception as e:
             messages.append({"role": "assistant", "content": [
                 {"type": "text",
                  "text": f"[Error] {type(e).__name__}: {e}"}]})
             return
 
-        messages.append({"role": "assistant", "content": response.content})
-        if response.stop_reason != "tool_use":
-            return
+        messages.extend(response.output)
+        if not function_calls(response):
+            return response
 
         results = []
-        for block in response.content:
-            if block.type != "tool_use":
+        for block in function_calls(response):
+            if block.type != "function_call":
                 continue
             print(f"\033[36m> {block.name}\033[0m")
             handler = TOOL_HANDLERS.get(block.name)
-            output = handler(**block.input) if handler else f"Unknown: {block.name}"
+            output = handler(**call_args(block)) if handler else f"Unknown: {block.name}"
             print(str(output)[:300])
-            results.append({"type": "tool_result",
-                            "tool_use_id": block.id, "content": output})
-        messages.append({"role": "user", "content": results})
+            results.append({"type": "function_call_output",
+                            "call_id": block.call_id, "output": output})
+        messages.extend(results)
         context = update_context(context, messages)
         system = get_system_prompt(context)
 

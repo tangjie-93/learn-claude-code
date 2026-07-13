@@ -10,9 +10,9 @@ s04: Hooks — move extension logic out of the loop, onto hooks.
   └────────┬─────────┘
            ▼
   ┌────────────┐     ┌─────────────────────────────┐
-  │  messages  │────▶│  LLM (stop_reason=tool_use?)│
+  │  messages  │────▶│  LLM (stop_reason=function_call?)│
   └────────────┘     │   No ──▶ Stop hooks ──▶ exit │
-                     │   Yes ──▶ tool_use block ──┐ │
+                     │   Yes ──▶ function_call block ──┐ │
                      └────────────────────────────┘ │
                                                     ▼
                                           ┌──────────────────┐
@@ -61,7 +61,6 @@ except ImportError:
     pass
 
 from openai import OpenAI
-from types import SimpleNamespace
 from dotenv import load_dotenv
 
 load_dotenv(override=True)
@@ -73,91 +72,10 @@ WORKDIR = Path.cwd()
 client = OpenAI(**client_kwargs)
 MODEL = os.getenv("OPENAI_MODEL", "gpt-5.5")
 
-# ═══════════════════════════════════════════════════════════
-#  OpenAI Responses API compatibility helpers
-#  Keep the chapter logic below unchanged: tools still return tool_use-like
-#  blocks to the loop, while this layer maps them to function_call internally.
-# ═══════════════════════════════════════════════════════════
+# OpenAI Responses API helpers
 
-def _block_type(block):
-    return block.get("type") if isinstance(block, dict) else getattr(block, "type", None)
-
-
-def _block_attr(block, name, default=None):
-    return block.get(name, default) if isinstance(block, dict) else getattr(block, name, default)
-
-
-def _json_arguments(value) -> str:
-    if isinstance(value, str):
-        return value
-    return json.dumps(value or {}, ensure_ascii=False)
-
-
-def _to_openai_input(messages: list) -> list:
-    converted = []
-    for msg in messages:
-        role = msg.get("role", "user")
-        content = msg.get("content", "")
-
-        if isinstance(content, str):
-            converted.append({"role": role, "content": content})
-            continue
-        if not isinstance(content, list):
-            converted.append({"role": role, "content": str(content)})
-            continue
-
-        text_parts = []
-        for block in content:
-            kind = _block_type(block)
-            if kind == "text":
-                text = _block_attr(block, "text", "")
-                if text:
-                    text_parts.append(str(text))
-            elif kind == "tool_use":
-                if text_parts:
-                    converted.append({"role": "assistant", "content": "\n".join(text_parts)})
-                    text_parts = []
-                converted.append({
-                    "type": "function_call",
-                    "call_id": _block_attr(block, "id"),
-                    "name": _block_attr(block, "name"),
-                    "arguments": _json_arguments(_block_attr(block, "input", {})),
-                })
-            elif kind == "tool_result":
-                if text_parts:
-                    converted.append({"role": role, "content": "\n".join(text_parts)})
-                    text_parts = []
-                converted.append({
-                    "type": "function_call_output",
-                    "call_id": _block_attr(block, "tool_use_id"),
-                    "output": str(_block_attr(block, "content", "")),
-                })
-
-        if text_parts:
-            converted.append({"role": role, "content": "\n".join(text_parts)})
-    return converted
-
-
-def _to_openai_tools(tools: list | None) -> list | None:
-    if not tools:
-        return None
-    converted = []
-    for tool in tools:
-        if tool.get("type") == "function":
-            converted.append(tool)
-            continue
-        schema = dict(tool.get("input_schema") or tool.get("parameters") or {"type": "object"})
-        schema.setdefault("type", "object")
-        converted.append({
-            "type": "function",
-            "name": tool["name"],
-            "description": tool.get("description", ""),
-            "parameters": schema,
-        })
-    return converted
-
-
-def _parse_arguments(raw) -> dict:
+def parse_arguments(raw) -> dict:
+    """Parse a native Responses API function-call argument string."""
     try:
         parsed = json.loads(raw or "{}") if isinstance(raw, str) else raw
         return parsed if isinstance(parsed, dict) else {}
@@ -165,47 +83,15 @@ def _parse_arguments(raw) -> dict:
         return {}
 
 
-def _from_openai_response(response):
-    content = []
-    for item in getattr(response, "output", []) or []:
-        kind = getattr(item, "type", None)
-        if kind == "function_call":
-            call_id = getattr(item, "call_id", None) or getattr(item, "id", None)
-            content.append(SimpleNamespace(
-                type="tool_use",
-                id=str(call_id),
-                name=getattr(item, "name", ""),
-                input=_parse_arguments(getattr(item, "arguments", "{}")),
-            ))
-        elif kind == "message":
-            for part in getattr(item, "content", []) or []:
-                if getattr(part, "type", None) == "output_text":
-                    text = getattr(part, "text", "")
-                    if text:
-                        content.append(SimpleNamespace(type="text", text=text))
-
-    if not content and getattr(response, "output_text", ""):
-        content.append(SimpleNamespace(type="text", text=response.output_text))
-
-    stop_reason = "tool_use" if any(getattr(block, "type", None) == "tool_use" for block in content) else "end_turn"
-    incomplete = getattr(response, "incomplete_details", None)
-    if getattr(response, "status", None) == "incomplete" and getattr(incomplete, "reason", None) == "max_output_tokens":
-        stop_reason = "max_tokens"
-    return SimpleNamespace(content=content, stop_reason=stop_reason)
+def function_calls(response):
+    """Return the native function_call output items from a response."""
+    return [item for item in response.output if getattr(item, "type", None) == "function_call"]
 
 
-def openai_messages_create(*, model: str | None = None, system: str = "", messages: list | None = None,
-                           tools: list | None = None, max_tokens: int = 8000, **_):
-    request = {
-        "model": model or MODEL,
-        "instructions": system or "",
-        "input": _to_openai_input(messages or []),
-        "max_output_tokens": max_tokens,
-    }
-    openai_tools = _to_openai_tools(tools)
-    if openai_tools:
-        request["tools"] = openai_tools
-    return _from_openai_response(client.responses.create(**request))
+def call_args(call) -> dict:
+    """Return a function call's parsed arguments."""
+    return parse_arguments(call.arguments)
+
 
 
 SYSTEM = f"You are a coding agent at {WORKDIR}. Use tools to solve tasks. Act, don't explain."
@@ -271,16 +157,16 @@ def run_glob(pattern: str) -> str:
         return f"Error: {e}"
 
 TOOLS = [
-    {"name": "bash", "description": "Run a shell command.",
-     "input_schema": {"type": "object", "properties": {"command": {"type": "string"}}, "required": ["command"]}},
-    {"name": "read_file", "description": "Read file contents.",
-     "input_schema": {"type": "object", "properties": {"path": {"type": "string"}, "limit": {"type": "integer"}}, "required": ["path"]}},
-    {"name": "write_file", "description": "Write content to a file.",
-     "input_schema": {"type": "object", "properties": {"path": {"type": "string"}, "content": {"type": "string"}}, "required": ["path", "content"]}},
-    {"name": "edit_file", "description": "Replace exact text in a file once.",
-     "input_schema": {"type": "object", "properties": {"path": {"type": "string"}, "old_text": {"type": "string"}, "new_text": {"type": "string"}}, "required": ["path", "old_text", "new_text"]}},
-    {"name": "glob", "description": "Find files matching a glob pattern.",
-     "input_schema": {"type": "object", "properties": {"pattern": {"type": "string"}}, "required": ["pattern"]}},
+    {"type": "function", "name": "bash", "description": "Run a shell command.",
+     "parameters": {"type": "object", "properties": {"command": {"type": "string"}}, "required": ["command"]}},
+    {"type": "function", "name": "read_file", "description": "Read file contents.",
+     "parameters": {"type": "object", "properties": {"path": {"type": "string"}, "limit": {"type": "integer"}}, "required": ["path"]}},
+    {"type": "function", "name": "write_file", "description": "Write content to a file.",
+     "parameters": {"type": "object", "properties": {"path": {"type": "string"}, "content": {"type": "string"}}, "required": ["path", "content"]}},
+    {"type": "function", "name": "edit_file", "description": "Replace exact text in a file once.",
+     "parameters": {"type": "object", "properties": {"path": {"type": "string"}, "old_text": {"type": "string"}, "new_text": {"type": "string"}}, "required": ["path", "old_text", "new_text"]}},
+    {"type": "function", "name": "glob", "description": "Find files matching a glob pattern.",
+     "parameters": {"type": "object", "properties": {"pattern": {"type": "string"}}, "required": ["pattern"]}},
 ]
 
 TOOL_HANDLERS = {
@@ -314,21 +200,21 @@ def permission_hook(block):
     """PreToolUse: s03 check_permission() logic moved here."""
     if block.name == "bash":
         for pattern in DENY_LIST:
-            if pattern in block.input.get("command", ""):
+            if pattern in call_args(block).get("command", ""):
                 print(f"\n\033[31m⛔ Blocked: '{pattern}'\033[0m")
                 return "Permission denied by deny list"
         for kw in DESTRUCTIVE:
-            if kw in block.input.get("command", ""):
+            if kw in call_args(block).get("command", ""):
                 print(f"\n\033[33m⚠  Potentially destructive command\033[0m")
-                print(f"   Tool: {block.name}({block.input})")
+                print(f"   Tool: {block.name}({call_args(block)})")
                 choice = input("   Allow? [y/N] ").strip().lower()
                 if choice not in ("y", "yes"):
                     return "Permission denied by user"
     if block.name in ("write_file", "edit_file"):
-        path = block.input.get("path", "")
+        path = call_args(block).get("path", "")
         if not (WORKDIR / path).resolve().is_relative_to(WORKDIR):
             print(f"\n\033[33m⚠  Writing outside workspace\033[0m")
-            print(f"   Tool: {block.name}({block.input})")
+            print(f"   Tool: {block.name}({call_args(block)})")
             choice = input("   Allow? [y/N] ").strip().lower()
             if choice not in ("y", "yes"):
                 return "Permission denied by user"
@@ -336,7 +222,7 @@ def permission_hook(block):
 
 def log_hook(block):
     """PreToolUse: log every tool call."""
-    args_preview = str(list(block.input.values())[:2])[:60]
+    args_preview = str(list(call_args(block).values())[:2])[:60]
     print(f"\033[90m[HOOK] {block.name}({args_preview})\033[0m")
     return None
 
@@ -355,7 +241,7 @@ def context_inject_hook(query: str):
 def summary_hook(messages: list):
     tool_count = sum(1 for m in messages
                      for b in (m.get("content") if isinstance(m.get("content"), list) else [])
-                     if isinstance(b, dict) and b.get("type") == "tool_result")
+                     if isinstance(b, dict) and b.get("type") == "function_call_output")
     print(f"\033[90m[HOOK] Stop: session used {tool_count} tool calls\033[0m")
     return None
 
@@ -374,13 +260,13 @@ register_hook("Stop", summary_hook)
 
 def agent_loop(messages: list):
     while True:
-        response = openai_messages_create(
-            model=MODEL, system=SYSTEM, messages=messages,
-            tools=TOOLS, max_tokens=8000,
+        response = client.responses.create(
+            model=MODEL, instructions=SYSTEM, input=messages,
+            tools=TOOLS, max_output_tokens=8000,
         )
-        messages.append({"role": "assistant", "content": response.content})
+        messages.extend(response.output)
 
-        if response.stop_reason != "tool_use":
+        if not function_calls(response):
             force = trigger_hooks("Stop", messages)
             if force:
                 messages.append({"role": "user", "content": force})
@@ -388,25 +274,25 @@ def agent_loop(messages: list):
             return
 
         results = []
-        for block in response.content:
-            if block.type != "tool_use":
+        for block in function_calls(response):
+            if block.type != "function_call":
                 continue
 
             # s04 change: hook replaces hard-coded check_permission()
             blocked = trigger_hooks("PreToolUse", block)
             if blocked:
-                results.append({"type": "tool_result", "tool_use_id": block.id,
-                                "content": str(blocked)})
+                results.append({"type": "function_call_output", "call_id": block.call_id,
+                                "output": str(blocked)})
                 continue
 
             handler = TOOL_HANDLERS.get(block.name)
-            output = handler(**block.input) if handler else f"Unknown: {block.name}"
+            output = handler(**call_args(block)) if handler else f"Unknown: {block.name}"
 
             trigger_hooks("PostToolUse", block, output)  # s04: post hook
 
-            results.append({"type": "tool_result", "tool_use_id": block.id, "content": output})
+            results.append({"type": "function_call_output", "call_id": block.call_id, "output": output})
 
-        messages.append({"role": "user", "content": results})
+        messages.extend(results)
 
 
 if __name__ == "__main__":
@@ -423,8 +309,7 @@ if __name__ == "__main__":
             break
         trigger_hooks("UserPromptSubmit", query)
         history.append({"role": "user", "content": query})
-        agent_loop(history)
-        for block in history[-1]["content"]:
-            if getattr(block, "type", None) == "text":
-                print(block.text)
+        response = agent_loop(history)
+        if response and response.output_text:
+            print(response.output_text)
         print()
