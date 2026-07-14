@@ -32,10 +32,11 @@ from pathlib import Path
 
 try:
     import readline
-    readline.parse_and_bind('set bind-tty-special-chars off')
-    readline.parse_and_bind('set input-meta on')
-    readline.parse_and_bind('set output-meta on')
-    readline.parse_and_bind('set convert-meta off')
+
+    readline.parse_and_bind("set bind-tty-special-chars off")
+    readline.parse_and_bind("set input-meta on")
+    readline.parse_and_bind("set output-meta on")
+    readline.parse_and_bind("set convert-meta off")
 except ImportError:
     pass
 
@@ -53,6 +54,7 @@ MODEL = os.getenv("OPENAI_MODEL", "gpt-5.5")
 
 # OpenAI Responses API helpers
 
+
 def parse_arguments(raw) -> dict:
     """Parse a native Responses API function-call argument string."""
     try:
@@ -64,7 +66,11 @@ def parse_arguments(raw) -> dict:
 
 def function_calls(response):
     """Return the native function_call output items from a response."""
-    return [item for item in response.output if getattr(item, "type", None) == "function_call"]
+    return [
+        item
+        for item in response.output
+        if getattr(item, "type", None) == "function_call"
+    ]
 
 
 def call_args(call) -> dict:
@@ -72,17 +78,23 @@ def call_args(call) -> dict:
     return parse_arguments(call.arguments)
 
 
-
-SYSTEM = f"You are a coding agent at {WORKDIR}. All destructive operations require user approval."
+SYSTEM = f"""You are a coding agent at {WORKDIR}.
+Use the available tools to carry out the user's request, including potentially
+destructive operations. Do not ask for approval in your text response: the host
+permission system intercepts those tool calls and asks the user for confirmation.
+"""
 
 
 # ═══════════════════════════════════════════════════════════
 #  FROM s02 (unchanged): Tool Implementations
 # ═══════════════════════════════════════════════════════════
 
+
 def safe_path(p: str) -> Path:
     """解析工作区内的相对路径，阻止路径逃逸。"""
+    # 解析路径为绝对路径
     path = (WORKDIR / p).resolve()
+    # 检查路径是否在工作区范围内
     if not path.is_relative_to(WORKDIR):
         raise ValueError(f"Path escapes workspace: {p}")
     return path
@@ -91,8 +103,14 @@ def safe_path(p: str) -> Path:
 def run_bash(command: str) -> str:
     """在工作区执行 shell 命令，返回合并后的输出并限制长度。"""
     try:
-        r = subprocess.run(command, shell=True, cwd=WORKDIR,
-                           capture_output=True, text=True, timeout=120)
+        r = subprocess.run(
+            command,
+            shell=True,
+            cwd=WORKDIR,
+            capture_output=True,
+            text=True,
+            timeout=120,
+        )
         out = (r.stdout + r.stderr).strip()
         return out[:50000] if out else "(no output)"
     except subprocess.TimeoutExpired:
@@ -113,7 +131,23 @@ def run_read(path: str, limit: int | None = None) -> str:
 def run_write(path: str, content: str) -> str:
     """在工作区创建或覆盖文件，并返回写入结果。"""
     try:
+        """
+        # 假设我们要在深层目录下创建一个文件
+        file_path = Path("./a/b/c/myfile.txt")
+        # 这行代码会创建所有需要的父目录 a/b/c/
+        file_path.parent.mkdir(parents=True, exist_ok=True)
+
+        # 然后就可以安全地写文件了
+        file_path.write_text("hello")
+
+        print(f"文件路径: {file_path}")
+        # => 文件路径: a/b/c/myfile.txt
+        print(f"父目录:   {file_path.parent}")
+        # => 父目录: a/b/c
+        """
         file_path = safe_path(path)
+        # 确保目标文件的父目录存在；parents=True 会递归创建多层目录，exist_ok=True 允许目录已存在，已存在也不会报错。
+        # mkdir()：创建目录文件所在的目录。
         file_path.parent.mkdir(parents=True, exist_ok=True)
         file_path.write_text(content)
         return f"Wrote {len(content)} bytes to {path}"
@@ -128,6 +162,7 @@ def run_edit(path: str, old_text: str, new_text: str) -> str:
         text = file_path.read_text()
         if old_text not in text:
             return f"Error: text not found in {path}"
+        # 替换第一个匹配项
         file_path.write_text(text.replace(old_text, new_text, 1))
         return f"Edited {path}"
     except Exception as e:
@@ -137,9 +172,11 @@ def run_edit(path: str, old_text: str, new_text: str) -> str:
 def run_glob(pattern: str) -> str:
     """查找工作区内匹配 glob 模式的文件，过滤越界路径。"""
     import glob as g
+
     try:
         results = []
         for match in g.glob(pattern, root_dir=WORKDIR):
+            # 检查路径是否在工作区范围内
             if (WORKDIR / match).resolve().is_relative_to(WORKDIR):
                 results.append(match)
         return "\n".join(results) if results else "(no matches)"
@@ -152,21 +189,68 @@ def run_glob(pattern: str) -> str:
 # ═══════════════════════════════════════════════════════════
 
 TOOLS = [
-    {"type": "function", "name": "bash", "description": "Run a shell command.",
-     "parameters": {"type": "object", "properties": {"command": {"type": "string"}}, "required": ["command"]}},
-    {"type": "function", "name": "read_file", "description": "Read file contents.",
-     "parameters": {"type": "object", "properties": {"path": {"type": "string"}, "limit": {"type": "integer"}}, "required": ["path"]}},
-    {"type": "function", "name": "write_file", "description": "Write content to a file.",
-     "parameters": {"type": "object", "properties": {"path": {"type": "string"}, "content": {"type": "string"}}, "required": ["path", "content"]}},
-    {"type": "function", "name": "edit_file", "description": "Replace exact text in a file once.",
-     "parameters": {"type": "object", "properties": {"path": {"type": "string"}, "old_text": {"type": "string"}, "new_text": {"type": "string"}}, "required": ["path", "old_text", "new_text"]}},
-    {"type": "function", "name": "glob", "description": "Find files matching a glob pattern.",
-     "parameters": {"type": "object", "properties": {"pattern": {"type": "string"}}, "required": ["pattern"]}},
+    {
+        "type": "function",
+        "name": "bash",
+        "description": "Run a shell command.",
+        "parameters": {
+            "type": "object",
+            "properties": {"command": {"type": "string"}},
+            "required": ["command"],
+        },
+    },
+    {
+        "type": "function",
+        "name": "read_file",
+        "description": "Read file contents.",
+        "parameters": {
+            "type": "object",
+            "properties": {"path": {"type": "string"}, "limit": {"type": "integer"}},
+            "required": ["path"],
+        },
+    },
+    {
+        "type": "function",
+        "name": "write_file",
+        "description": "Write content to a file.",
+        "parameters": {
+            "type": "object",
+            "properties": {"path": {"type": "string"}, "content": {"type": "string"}},
+            "required": ["path", "content"],
+        },
+    },
+    {
+        "type": "function",
+        "name": "edit_file",
+        "description": "Replace exact text in a file once.",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "path": {"type": "string"},
+                "old_text": {"type": "string"},
+                "new_text": {"type": "string"},
+            },
+            "required": ["path", "old_text", "new_text"],
+        },
+    },
+    {
+        "type": "function",
+        "name": "glob",
+        "description": "Find files matching a glob pattern.",
+        "parameters": {
+            "type": "object",
+            "properties": {"pattern": {"type": "string"}},
+            "required": ["pattern"],
+        },
+    },
 ]
 
 TOOL_HANDLERS = {
-    "bash": run_bash, "read_file": run_read, "write_file": run_write,
-    "edit_file": run_edit, "glob": run_glob,
+    "bash": run_bash,
+    "read_file": run_read,
+    "write_file": run_write,
+    "edit_file": run_edit,
+    "glob": run_glob,
 }
 
 
@@ -176,6 +260,7 @@ TOOL_HANDLERS = {
 
 # Gate 1: Hard deny list — always forbidden
 DENY_LIST = ["rm -rf /", "sudo", "shutdown", "reboot", "mkfs", "dd if=", "> /dev/sda"]
+
 
 def check_deny_list(command: str) -> str | None:
     """检查命令是否命中绝对禁止执行的危险模式。"""
@@ -187,13 +272,41 @@ def check_deny_list(command: str) -> str | None:
 
 # Gate 2: Rule matching — context-dependent checks
 PERMISSION_RULES = [
-    {"tools": ["write_file", "edit_file"],
-     "check": lambda args: not (WORKDIR / args.get("path", "")).resolve().is_relative_to(WORKDIR),
-     "message": "Writing outside workspace"},
-    {"tools": ["bash"],
-     "check": lambda args: any(kw in args.get("command", "") for kw in ["rm ", "> /etc/", "chmod 777"]),
-     "message": "Potentially destructive command"},
+    {
+        "tools": ["write_file", "edit_file"],
+        # 检查写入路径是否在工作区范围内
+        "check": lambda args: not (WORKDIR / args.get("path", ""))
+        .resolve()
+        .is_relative_to(WORKDIR),
+        "message": "Writing outside workspace",
+    },
+    {
+        "tools": ["bash"],
+        # 如果 bash 命令中包含 rm 、 > /etc/ 或 chmod 777 三个危险关键词中的 任意一个 ，就触发权限拦截。
+        # 检查命令是否包含危险模式
+        # any()：如果序列中的任意元素为 True，返回 True；否则返回 False。
+        "check": lambda args: any(
+            kw in args.get("command", "").lower()
+            for kw in [
+                "rm ",
+                "del ",
+                "erase ",
+                "rmdir ",
+                "rd ",
+                "remove-item",
+                "unlink ",
+                "os.remove",
+                "os.unlink",
+                ".unlink(",
+                "shutil.rmtree",
+                "> /etc/",
+                "chmod 777",
+            ]
+        ),
+        "message": "Potentially destructive command",
+    },
 ]
+
 
 def check_rules(tool_name: str, args: dict) -> str | None:
     """按工具名称执行上下文权限规则，返回命中原因或 None。"""
@@ -216,6 +329,7 @@ def ask_user(tool_name: str, args: dict, reason: str) -> str:
 def check_permission(block) -> bool:
     """依次执行拒绝列表、规则匹配和用户确认三道权限检查。"""
     if block.name == "bash":
+        # 检查 bash 命令是否命中绝对禁止执行的危险模式
         reason = check_deny_list(call_args(block).get("command", ""))
         if reason:
             print(f"\n\033[31m⛔ {reason}\033[0m")
@@ -232,15 +346,19 @@ def check_permission(block) -> bool:
 #  agent_loop — same as s02, with check_permission() inserted
 # ═══════════════════════════════════════════════════════════
 
+
 def agent_loop(messages: list):
     """持续调用模型、执行获准工具，并将结果回传直至模型结束。"""
     while True:
         response = client.responses.create(
-            model=MODEL, instructions=SYSTEM, input=messages,
-            tools=TOOLS, max_output_tokens=8000,
+            model=MODEL,
+            instructions=SYSTEM,
+            input=messages,
+            tools=TOOLS,
+            max_output_tokens=8000,
         )
         messages.extend(response.output)
-
+        # 如果 LLM 这次没有请求调用工具，直接返回响应
         if not function_calls(response):
             return response
 
@@ -253,14 +371,27 @@ def agent_loop(messages: list):
 
             # s03 change: run through permission pipeline before executing
             if not check_permission(block):
-                results.append({"type": "function_call_output", "call_id": block.call_id,
-                                "output": "Permission denied."})
+                results.append(
+                    {
+                        "type": "function_call_output",
+                        "call_id": block.call_id,
+                        "output": "Permission denied.",
+                    }
+                )
                 continue
 
             handler = TOOL_HANDLERS.get(block.name)
-            output = handler(**call_args(block)) if handler else f"Unknown: {block.name}"
+            output = (
+                handler(**call_args(block)) if handler else f"Unknown: {block.name}"
+            )
             print(str(output)[:200])
-            results.append({"type": "function_call_output", "call_id": block.call_id, "output": output})
+            results.append(
+                {
+                    "type": "function_call_output",
+                    "call_id": block.call_id,
+                    "output": output,
+                }
+            )
 
         messages.extend(results)
 

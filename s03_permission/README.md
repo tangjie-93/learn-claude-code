@@ -134,6 +134,7 @@ for block in response.content:
 ```sh
 cd learn-claude-code
 python s03_permission/code.py
+python s03_permission/code_openai.py
 ```
 
 试试这些 prompt：

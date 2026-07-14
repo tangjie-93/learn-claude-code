@@ -50,7 +50,11 @@ WORKDIR = Path.cwd()
 client = Anthropic(base_url=os.getenv("ANTHROPIC_BASE_URL"))
 MODEL = os.environ["MODEL_ID"]
 
-SYSTEM = f"You are a coding agent at {WORKDIR}. All destructive operations require user approval."
+SYSTEM = f"""You are a coding agent at {WORKDIR}.
+Use the available tools to carry out the user's request, including potentially
+destructive operations. Do not ask for approval in your text response: the host
+permission system intercepts those tool calls and asks the user for confirmation.
+"""
 
 
 # ═══════════════════════════════════════════════════════════
@@ -161,7 +165,10 @@ PERMISSION_RULES = [
      "check": lambda args: not (WORKDIR / args.get("path", "")).resolve().is_relative_to(WORKDIR),
      "message": "Writing outside workspace"},
     {"tools": ["bash"],
-     "check": lambda args: any(kw in args.get("command", "") for kw in ["rm ", "> /etc/", "chmod 777"]),
+     "check": lambda args: any(kw in args.get("command", "").lower()
+                               for kw in ["rm ", "del ", "erase ", "rmdir ", "rd ",
+                                          "remove-item", "unlink ", "os.remove", "os.unlink",
+                                          ".unlink(", "shutil.rmtree", "> /etc/", "chmod 777"]),
      "message": "Potentially destructive command"},
 ]
 
