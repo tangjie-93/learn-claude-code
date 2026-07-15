@@ -52,7 +52,7 @@ MODEL = os.getenv("OPENAI_MODEL", "gpt-5.5")
 # OpenAI Responses API helpers
 
 def parse_arguments(raw) -> dict:
-    """Parse a native Responses API function-call argument string."""
+    """解析 Responses API 原生函数调用里的参数字符串。"""
     try:
         parsed = json.loads(raw or "{}") if isinstance(raw, str) else raw
         return parsed if isinstance(parsed, dict) else {}
@@ -61,12 +61,12 @@ def parse_arguments(raw) -> dict:
 
 
 def function_calls(response):
-    """Return the native function_call output items from a response."""
+    """从一次响应中取出所有原生 function_call 输出项。"""
     return [item for item in response.output if getattr(item, "type", None) == "function_call"]
 
 
 def call_args(call) -> dict:
-    """Return a function call's parsed arguments."""
+    """返回某个函数调用已经解析好的参数字典。"""
     return parse_arguments(call.arguments)
 
 
@@ -90,12 +90,14 @@ SUB_SYSTEM = (
 # ═══════════════════════════════════════════════════════════
 
 def safe_path(p: str) -> Path:
+    """把用户路径解析到 WORKDIR 内，并拒绝越界路径。"""
     path = (WORKDIR / p).resolve()
     if not path.is_relative_to(WORKDIR):
         raise ValueError(f"Path escapes workspace: {p}")
     return path
 
 def run_bash(command: str) -> str:
+    """在 WORKDIR 中执行 shell 命令，并返回合并后的 stdout/stderr 文本。"""
     try:
         r = subprocess.run(command, shell=True, cwd=WORKDIR,
                            capture_output=True, text=True, timeout=120)
@@ -105,6 +107,7 @@ def run_bash(command: str) -> str:
         return "Error: Timeout (120s)"
 
 def run_read(path: str, limit: int | None = None) -> str:
+    """读取工作区文本文件，可选只返回前 limit 行。"""
     try:
         lines = safe_path(path).read_text().splitlines()
         if limit and limit < len(lines):
@@ -114,6 +117,7 @@ def run_read(path: str, limit: int | None = None) -> str:
         return f"Error: {e}"
 
 def run_write(path: str, content: str) -> str:
+    """创建或覆盖工作区文件，并先补齐父目录。"""
     try:
         file_path = safe_path(path)
         file_path.parent.mkdir(parents=True, exist_ok=True)
@@ -123,6 +127,7 @@ def run_write(path: str, content: str) -> str:
         return f"Error: {e}"
 
 def run_edit(path: str, old_text: str, new_text: str) -> str:
+    """在工作区文件中替换第一个精确匹配的 old_text。"""
     try:
         file_path = safe_path(path)
         text = file_path.read_text()
@@ -134,6 +139,7 @@ def run_edit(path: str, old_text: str, new_text: str) -> str:
         return f"Error: {e}"
 
 def run_glob(pattern: str) -> str:
+    """返回匹配 glob 模式的工作区相对路径。"""
     import glob as g
     try:
         results = []
@@ -145,6 +151,7 @@ def run_glob(pattern: str) -> str:
         return f"Error: {e}"
 
 def _normalize_todos(todos):
+    """解析并校验 todo_write 输入，再交给 CURRENT_TODOS 保存。"""
     if isinstance(todos, str):
         try:
             todos = json.loads(todos)
@@ -165,6 +172,7 @@ def _normalize_todos(todos):
     return todos, None
 
 def run_todo_write(todos: list) -> str:
+    """更新内存中的任务列表，并用状态图标打印出来。"""
     global CURRENT_TODOS
     todos, error = _normalize_todos(todos)
     if error:
@@ -222,13 +230,13 @@ SUB_HANDLERS = {
 }
 
 def extract_text(content) -> str:
-    """Extract text from message content blocks."""
+    """从 assistant 的 content 值或内容块列表中提取纯文本。"""
     if not isinstance(content, list):
         return str(content)
     return "\n".join(getattr(b, "text", "") for b in content if getattr(b, "type", None) == "text")
 
 def spawn_subagent(description: str) -> str:
-    """Spawn a subagent with fresh messages[], return summary only."""
+    """用隔离上下文运行子代理，并只返回它的最终总结。"""
     print(f"\n\033[35m[Subagent spawned]\033[0m")
     messages = [{"role": "user", "content": description}]  # fresh context
 
@@ -287,9 +295,11 @@ TOOL_HANDLERS["task"] = spawn_subagent
 HOOKS = {"UserPromptSubmit": [], "PreToolUse": [], "PostToolUse": [], "Stop": []}
 
 def register_hook(event: str, callback):
+    """为指定 hook 事件注册一个回调函数。"""
     HOOKS[event].append(callback)
 
 def trigger_hooks(event: str, *args):
+    """按顺序执行 hook 回调，并返回第一个非 None 结果。"""
     for callback in HOOKS[event]:
         result = callback(*args)
         if result is not None:
@@ -299,7 +309,7 @@ def trigger_hooks(event: str, *args):
 DENY_LIST = ["rm -rf /", "sudo", "shutdown", "reboot", "mkfs", "dd if="]
 
 def permission_hook(block):
-    """PreToolUse: deny list check."""
+    """工具执行前（PreToolUse）：检查 bash 命令是否命中拒绝列表。"""
     if block.name == "bash":
         for p in DENY_LIST:
             if p in call_args(block).get("command", ""):
@@ -308,17 +318,17 @@ def permission_hook(block):
     return None
 
 def log_hook(block):
-    """PreToolUse: log tool calls."""
+    """工具执行前（PreToolUse）：记录即将执行的工具调用。"""
     print(f"\033[90m[HOOK] {block.name}\033[0m")
     return None
 
 def context_inject_hook(query: str):
-    """UserPromptSubmit: log working directory."""
+    """用户提交提示后（UserPromptSubmit）：打印当前工作目录。"""
     print(f"\033[90m[HOOK] UserPromptSubmit: working in {WORKDIR}\033[0m")
     return None
 
 def summary_hook(messages: list):
-    """Stop: print tool call count."""
+    """停止前（Stop）：打印本轮会话的工具调用次数。"""
     tool_count = sum(1 for m in messages
                      for b in (m.get("content") if isinstance(m.get("content"), list) else [])
                      if isinstance(b, dict) and b.get("type") == "function_call_output")
@@ -338,6 +348,7 @@ register_hook("Stop", summary_hook)
 rounds_since_todo = 0
 
 def agent_loop(messages: list):
+    """驱动父代理循环，分发工具调用，并提醒模型及时更新 todo。"""
     global rounds_since_todo
     while True:
         # s05: nag reminder
