@@ -392,13 +392,17 @@ def agent_loop(messages: list):
     """驱动模型和工具的多轮交互，并定期提醒更新任务列表。"""
     global rounds_since_todo
     while True:
-        # s05: nag reminder — inject if model hasn't updated todos for 3 rounds
+        # 1. TodoWrite 催办机制：
+        # 如果模型连续 3 轮调用了工具，但都没有更新 todo_write，
+        # 就把一条 reminder 作为新的 user 消息塞进上下文，提醒模型更新任务状态。
         if rounds_since_todo >= 3 and messages:
             messages.append(
                 {"role": "user", "content": "<reminder>Update your todos.</reminder>"}
             )
             rounds_since_todo = 0
 
+        # 2. 把当前对话历史发给模型。
+        # 模型可能直接回答，也可能返回一个或多个 function_call，让宿主程序执行工具。
         response = client.responses.create(
             model=MODEL,
             instructions=SYSTEM,
@@ -406,21 +410,31 @@ def agent_loop(messages: list):
             tools=TOOLS,
             max_output_tokens=8000,
         )
+
+        # 3. 把模型这一轮输出追加到历史里。
+        # OpenAI SDK 返回的是响应对象；下一轮 input 需要普通 JSON 风格数据，
+        # 所以先用 as_input_item() 转成 dict，避免第二轮请求时序列化报错。
         messages.extend(as_input_item(item) for item in response.output)
 
+        # 4. 如果模型没有请求工具调用，说明它已经给出最终回答或停止行动。
+        # Stop hook 可以选择返回一条新 user 消息强制继续；否则 agent_loop 结束。
         if not function_calls(response):
             force = trigger_hooks("Stop", messages)
             if force:
                 messages.append({"role": "user", "content": force})
                 continue
             return
-        # 模型调了工具 → 算一轮，+1
+
+        # 5. 只要模型本轮调用了工具，就算一轮“行动”。
+        # 后面如果这轮工具里包含 todo_write，会把计数清零。
         rounds_since_todo += 1
         results = []
         for block in function_calls(response):
             if block.type != "function_call":
                 continue
 
+            # 6. PreToolUse hook 在真正执行工具前运行。
+            # 例如权限检查可以在这里拦截危险命令；拦截时仍要回填一个工具结果给模型。
             blocked = trigger_hooks("PreToolUse", block)
             if blocked:
                 results.append(
@@ -432,17 +446,23 @@ def agent_loop(messages: list):
                 )
                 continue
 
+            # 7. 根据模型请求的工具名，从 TOOL_HANDLERS 找到本地函数并执行。
+            # call_args(block) 会把模型给的 JSON 参数解析成 Python dict，再展开为函数参数。
             handler = TOOL_HANDLERS.get(block.name)
             output = (
                 handler(**call_args(block)) if handler else f"Unknown: {block.name}"
             )
 
+            # 8. PostToolUse hook 在工具执行后运行，可用于记录日志、检查大输出等。
             trigger_hooks("PostToolUse", block, output)
 
-            # s05: reset nag counter when todo_write is called
+            # 9. todo_write 本身就是任务状态更新。
+            # 一旦模型调用了它，说明刚刚履行了“更新 todo”的要求，催办计数清零。
             if block.name == "todo_write":
                 rounds_since_todo = 0
 
+            # 10. 把工具执行结果整理成 Responses API 要求的 function_call_output。
+            # call_id 必须和模型刚才的 function_call 对上，模型才能知道这是哪个工具调用的结果。
             results.append(
                 {
                     "type": "function_call_output",
@@ -451,6 +471,8 @@ def agent_loop(messages: list):
                 }
             )
 
+        # 11. 一轮里可能有多个工具调用；统一把所有工具结果追加到历史。
+        # 下一次 while 循环会把这些结果再发给模型，让模型基于结果继续推理或最终回答。
         messages.extend(results)
 
 
