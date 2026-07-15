@@ -76,6 +76,13 @@ def call_args(call) -> dict:
     return parse_arguments(call.arguments)
 
 
+def as_input_item(item):
+    """把 OpenAI SDK 响应项转换成下一轮请求可接收的普通 dict。"""
+    if hasattr(item, "model_dump"):
+        return item.model_dump(exclude_unset=True, mode="json")
+    return item
+
+
 CURRENT_TODOS: list[dict] = []
 
 # s05 change: SYSTEM prompt adds planning guidance
@@ -177,11 +184,13 @@ def _normalize_todos(todos):
             todos = json.loads(todos)
         except json.JSONDecodeError:
             try:
+                # 安全地将字符串解析为 Python 字面量（列表、字典、字符串、数字等），但不会执行任意代码。
                 todos = ast.literal_eval(todos)
             except (SyntaxError, ValueError):
                 return None, "Error: todos must be a list or JSON array string"
     if not isinstance(todos, list):
         return None, "Error: todos must be a list"
+    # enumerate(todos) 把列表拆成 (索引, 值) 对，方便遍历时同时知道位置和内容：
     for i, t in enumerate(todos):
         if not isinstance(t, dict):
             return None, f"Error: todos[{i}] must be an object"
@@ -194,18 +203,21 @@ def _normalize_todos(todos):
 
 def run_todo_write(todos: list) -> str:
     """更新当前任务列表，并在终端输出各任务状态。"""
+    # 全局变量 CURRENT_TODOS 用于存储当前任务列表，确保在不同函数调用之间保持一致。
     global CURRENT_TODOS
     todos, error = _normalize_todos(todos)
     if error:
         return error
     CURRENT_TODOS = todos
     lines = ["\n\033[33m## Current Tasks\033[0m"]
+    # 状态 → 图标映射，定义在循环外面避免每次循环都重新创建
+    STATUS_ICONS = {
+        "pending": " ",
+        "in_progress": "\033[36m▸\033[0m",  # 青色箭头
+        "completed": "\033[32m✓\033[0m",  # 绿色对勾
+    }
     for t in CURRENT_TODOS:
-        icon = {
-            "pending": " ",
-            "in_progress": "\033[36m▸\033[0m",
-            "completed": "\033[32m✓\033[0m",
-        }[t["status"]]
+        icon = STATUS_ICONS[t["status"]]
         lines.append(f"  [{icon}] {t['content']}")
     print("\n".join(lines))
     return f"Updated {len(CURRENT_TODOS)} tasks"
@@ -394,7 +406,7 @@ def agent_loop(messages: list):
             tools=TOOLS,
             max_output_tokens=8000,
         )
-        messages.extend(response.output)
+        messages.extend(as_input_item(item) for item in response.output)
 
         if not function_calls(response):
             force = trigger_hooks("Stop", messages)
@@ -402,7 +414,7 @@ def agent_loop(messages: list):
                 messages.append({"role": "user", "content": force})
                 continue
             return
-
+        # 模型调了工具 → 算一轮，+1
         rounds_since_todo += 1
         results = []
         for block in function_calls(response):

@@ -99,6 +99,13 @@ def call_args(call) -> dict:
     return parse_arguments(call.arguments)
 
 
+def as_input_item(item):
+    """将 OpenAI SDK 响应项转换为下一轮请求可接收的普通字典。"""
+    if hasattr(item, "model_dump"):
+        return item.model_dump(exclude_unset=True, mode="json")
+    return item
+
+
 SYSTEM = f"You are a coding agent at {WORKDIR}. Use tools to solve tasks. Act, don't explain."
 
 
@@ -370,7 +377,7 @@ def agent_loop(messages: list):
             tools=TOOLS,
             max_output_tokens=8000,
         )
-        messages.extend(response.output)
+        messages.extend(as_input_item(item) for item in response.output)
         if not function_calls(response):  # 1. 模型只回了文字，没调工具 → 任务可能完成了
             force = trigger_hooks(
                 "Stop", messages

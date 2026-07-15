@@ -6,7 +6,7 @@
       "type": "python",
       "request": "launch",
       "program": "${file}",
-      "python": "${workspaceFolder}/.venv/Scripts/python.exe",
+      "python": "${workspaceFolder}/.venv/bin/python",
       "console": "integratedTerminal",
       "cwd": "${workspaceFolder}",
       "justMyCode": true
@@ -16,7 +16,7 @@
       "type": "python",
       "request": "launch",
       "program": "${workspaceFolder}/s20_comprehensive/code.py",
-      "python": "${workspaceFolder}/.venv/Scripts/python.exe",
+      "python": "${workspaceFolder}/.venv/bin/python",
       "console": "integratedTerminal",
       "cwd": "${workspaceFolder}",
       "justMyCode": true

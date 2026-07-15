@@ -78,6 +78,13 @@ def call_args(call) -> dict:
     return parse_arguments(call.arguments)
 
 
+def as_input_item(item):
+    """Convert OpenAI SDK response items into plain input dictionaries."""
+    if hasattr(item, "model_dump"):
+        return item.model_dump(exclude_unset=True, mode="json")
+    return item
+
+
 SYSTEM = f"""You are a coding agent at {WORKDIR}.
 Use the available tools to carry out the user's request, including potentially
 destructive operations. Do not ask for approval in your text response: the host
@@ -359,7 +366,7 @@ def agent_loop(messages: list):
             tools=TOOLS,
             max_output_tokens=8000,
         )
-        messages.extend(response.output)
+        messages.extend(as_input_item(item) for item in response.output)
         # 如果 LLM 这次没有请求调用工具，直接返回响应
         if not function_calls(response):
             return response
