@@ -1,0 +1,10 @@
+{
+  "recommendations": [
+    "ms-python.python",
+    "ms-python.debugpy",
+    "ms-vscode.js-debug-nightly",
+    "redhat.java",
+    "vscjava.vscode-java-debug",
+    "vue.volar"
+  ]
+}
