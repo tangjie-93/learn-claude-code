@@ -1,0 +1,30 @@
+{
+  "version": "2.0.0",
+  "tasks": [
+    {
+      "label": "Next.js: Start development server",
+      "type": "npm",
+      "script": "dev",
+      "path": "web",
+      "isBackground": true,
+      "problemMatcher": {
+        "owner": "nextjs",
+        "pattern": [
+          {
+            "regexp": "^(.+):(\\d+):(\\d+) - (error|warning): (.+)$",
+            "file": 1,
+            "line": 2,
+            "column": 3,
+            "severity": 4,
+            "message": 5
+          }
+        ],
+        "background": {
+          "activeOnStart": true,
+          "beginsPattern": "^> web@.* (predev|dev)",
+          "endsPattern": "- Local:.+(https?://.+)"
+        }
+      }
+    }
+  ]
+}
