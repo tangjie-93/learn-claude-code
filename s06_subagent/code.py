@@ -154,49 +154,63 @@ def run_todo_write(todos: list) -> str:
     print("\n".join(lines))
     return f"Updated {len(CURRENT_TODOS)} tasks"
 
-TOOLS = [
-    {"name": "bash", "description": "Run a shell command.",
-     "input_schema": {"type": "object", "properties": {"command": {"type": "string"}}, "required": ["command"]}},
-    {"name": "read_file", "description": "Read file contents.",
-     "input_schema": {"type": "object", "properties": {"path": {"type": "string"}, "limit": {"type": "integer"}}, "required": ["path"]}},
-    {"name": "write_file", "description": "Write content to a file.",
-     "input_schema": {"type": "object", "properties": {"path": {"type": "string"}, "content": {"type": "string"}}, "required": ["path", "content"]}},
-    {"name": "edit_file", "description": "Replace exact text in a file once.",
-     "input_schema": {"type": "object", "properties": {"path": {"type": "string"}, "old_text": {"type": "string"}, "new_text": {"type": "string"}}, "required": ["path", "old_text", "new_text"]}},
-    {"name": "glob", "description": "Find files matching a glob pattern.",
-     "input_schema": {"type": "object", "properties": {"pattern": {"type": "string"}}, "required": ["pattern"]}},
-    {"name": "todo_write", "description": "Create and manage a task list for your current coding session.",
-     "input_schema": {"type": "object", "properties": {"todos": {"type": "array", "items": {"type": "object", "properties": {"content": {"type": "string"}, "status": {"type": "string", "enum": ["pending", "in_progress", "completed"]}}, "required": ["content", "status"]}}}, "required": ["todos"]}},
+def tool_schema(name: str, description: str, properties: dict, required: list[str]) -> dict:
+    return {
+        "name": name,
+        "description": description,
+        "input_schema": {
+            "type": "object",
+            "properties": properties,
+            "required": required,
+        },
+    }
+
+
+BASE_TOOLS = [
+    tool_schema("bash", "Run a shell command.",
+                {"command": {"type": "string"}}, ["command"]),
+    tool_schema("read_file", "Read file contents.",
+                {"path": {"type": "string"}, "limit": {"type": "integer"}},
+                ["path"]),
+    tool_schema("write_file", "Write content to a file.",
+                {"path": {"type": "string"}, "content": {"type": "string"}},
+                ["path", "content"]),
+    tool_schema("edit_file", "Replace exact text in a file once.",
+                {"path": {"type": "string"}, "old_text": {"type": "string"},
+                 "new_text": {"type": "string"}},
+                ["path", "old_text", "new_text"]),
+    tool_schema("glob", "Find files matching a glob pattern.",
+                {"pattern": {"type": "string"}}, ["pattern"]),
 ]
 
-TOOL_HANDLERS = {
+TODO_TOOL = tool_schema(
+    "todo_write",
+    "Create and manage a task list for your current coding session.",
+    {"todos": {"type": "array", "items": {"type": "object",
+                                          "properties": {"content": {"type": "string"},
+                                                         "status": {"type": "string", "enum": ["pending", "in_progress", "completed"]}},
+                                          "required": ["content", "status"]}}},
+    ["todos"],
+)
+
+TOOLS = [*BASE_TOOLS, TODO_TOOL]
+
+BASE_HANDLERS = {
     "bash": run_bash, "read_file": run_read, "write_file": run_write,
-    "edit_file": run_edit, "glob": run_glob, "todo_write": run_todo_write,
+    "edit_file": run_edit, "glob": run_glob,
 }
+
+TOOL_HANDLERS = {**BASE_HANDLERS, "todo_write": run_todo_write}
 
 
 # ═══════════════════════════════════════════════════════════
 #  NEW in s06: Subagent — fresh messages[], summary only
 # ═══════════════════════════════════════════════════════════
 
-SUB_TOOLS = [
-    {"name": "bash", "description": "Run a shell command.",
-     "input_schema": {"type": "object", "properties": {"command": {"type": "string"}}, "required": ["command"]}},
-    {"name": "read_file", "description": "Read file contents.",
-     "input_schema": {"type": "object", "properties": {"path": {"type": "string"}}, "required": ["path"]}},
-    {"name": "write_file", "description": "Write content to a file.",
-     "input_schema": {"type": "object", "properties": {"path": {"type": "string"}, "content": {"type": "string"}}, "required": ["path", "content"]}},
-    {"name": "edit_file", "description": "Replace exact text in a file once.",
-     "input_schema": {"type": "object", "properties": {"path": {"type": "string"}, "old_text": {"type": "string"}, "new_text": {"type": "string"}}, "required": ["path", "old_text", "new_text"]}},
-    {"name": "glob", "description": "Find files matching a glob pattern.",
-     "input_schema": {"type": "object", "properties": {"pattern": {"type": "string"}}, "required": ["pattern"]}},
-]
+SUB_TOOLS = list(BASE_TOOLS)
 # NO "task" tool — prevent recursive spawning
 
-SUB_HANDLERS = {
-    "bash": run_bash, "read_file": run_read, "write_file": run_write,
-    "edit_file": run_edit, "glob": run_glob,
-}
+SUB_HANDLERS = BASE_HANDLERS
 
 def extract_text(content) -> str:
     """Extract text from message content blocks."""

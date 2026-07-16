@@ -33,11 +33,12 @@ from pathlib import Path
 
 try:
     import readline
-    readline.parse_and_bind('set bind-tty-special-chars off')
+
+    readline.parse_and_bind("set bind-tty-special-chars off")
 except ImportError:
     pass
 
-from openai import OpenAI
+from openai import APIStatusError, OpenAI, OpenAIError
 from dotenv import load_dotenv
 
 load_dotenv(override=True)
@@ -51,6 +52,33 @@ MODEL = os.getenv("OPENAI_MODEL", "gpt-5.5")
 
 # OpenAI Responses API helpers
 
+
+def create_response(*, instructions: str, input: list, tools: list):
+    try:
+        return client.responses.create(
+            model=MODEL,
+            instructions=instructions,
+            input=input,
+            tools=tools,
+            max_output_tokens=8000,
+        )
+    except APIStatusError as e:
+        print(
+            "\nOpenAI API request failed: "
+            f"HTTP {e.status_code} for {getattr(e.request, 'url', 'unknown URL')}"
+        )
+        print(f"Model: {MODEL}")
+        print(f"Message: {e.message}")
+        if e.status_code == 502:
+            print(
+                "Hint: this is an upstream/proxy failure. Check OPENAI_BASE_URL and whether the provider supports the Responses API."
+            )
+        return None
+    except OpenAIError as e:
+        print(f"\nOpenAI API request failed: {e}")
+        return None
+
+
 def parse_arguments(raw) -> dict:
     """解析 Responses API 原生函数调用里的参数字符串。"""
     try:
@@ -60,9 +88,20 @@ def parse_arguments(raw) -> dict:
         return {}
 
 
+def as_input_item(item):
+    """把 OpenAI SDK 响应项转换成下一轮请求可接收的普通 dict。"""
+    if hasattr(item, "model_dump"):
+        return item.model_dump(exclude_unset=True, mode="json")
+    return item
+
+
 def function_calls(response):
     """从一次响应中取出所有原生 function_call 输出项。"""
-    return [item for item in response.output if getattr(item, "type", None) == "function_call"]
+    return [
+        item
+        for item in response.output
+        if getattr(item, "type", None) == "function_call"
+    ]
 
 
 def call_args(call) -> dict:
@@ -89,6 +128,7 @@ SUB_SYSTEM = (
 #  FROM s02-s05 (unchanged): Tool Implementations
 # ═══════════════════════════════════════════════════════════
 
+
 def safe_path(p: str) -> Path:
     """把用户路径解析到 WORKDIR 内，并拒绝越界路径。"""
     path = (WORKDIR / p).resolve()
@@ -96,15 +136,23 @@ def safe_path(p: str) -> Path:
         raise ValueError(f"Path escapes workspace: {p}")
     return path
 
+
 def run_bash(command: str) -> str:
     """在 WORKDIR 中执行 shell 命令，并返回合并后的 stdout/stderr 文本。"""
     try:
-        r = subprocess.run(command, shell=True, cwd=WORKDIR,
-                           capture_output=True, text=True, timeout=120)
+        r = subprocess.run(
+            command,
+            shell=True,
+            cwd=WORKDIR,
+            capture_output=True,
+            text=True,
+            timeout=120,
+        )
         out = (r.stdout + r.stderr).strip()
         return out[:50000] if out else "(no output)"
     except subprocess.TimeoutExpired:
         return "Error: Timeout (120s)"
+
 
 def run_read(path: str, limit: int | None = None) -> str:
     """读取工作区文本文件，可选只返回前 limit 行。"""
@@ -116,6 +164,7 @@ def run_read(path: str, limit: int | None = None) -> str:
     except Exception as e:
         return f"Error: {e}"
 
+
 def run_write(path: str, content: str) -> str:
     """创建或覆盖工作区文件，并先补齐父目录。"""
     try:
@@ -125,6 +174,7 @@ def run_write(path: str, content: str) -> str:
         return f"Wrote {len(content)} bytes to {path}"
     except Exception as e:
         return f"Error: {e}"
+
 
 def run_edit(path: str, old_text: str, new_text: str) -> str:
     """在工作区文件中替换第一个精确匹配的 old_text。"""
@@ -138,9 +188,11 @@ def run_edit(path: str, old_text: str, new_text: str) -> str:
     except Exception as e:
         return f"Error: {e}"
 
+
 def run_glob(pattern: str) -> str:
     """返回匹配 glob 模式的工作区相对路径。"""
     import glob as g
+
     try:
         results = []
         for match in g.glob(pattern, root_dir=WORKDIR):
@@ -149,6 +201,7 @@ def run_glob(pattern: str) -> str:
         return "\n".join(results) if results else "(no matches)"
     except Exception as e:
         return f"Error: {e}"
+
 
 def _normalize_todos(todos):
     """解析并校验 todo_write 输入，再交给 CURRENT_TODOS 保存。"""
@@ -171,6 +224,7 @@ def _normalize_todos(todos):
             return None, f"Error: todos[{i}] has invalid status '{t['status']}'"
     return todos, None
 
+
 def run_todo_write(todos: list) -> str:
     """更新内存中的任务列表，并用状态图标打印出来。"""
     global CURRENT_TODOS
@@ -180,92 +234,171 @@ def run_todo_write(todos: list) -> str:
     CURRENT_TODOS = todos
     lines = ["\n\033[33m## Current Tasks\033[0m"]
     for t in CURRENT_TODOS:
-        icon = {"pending": " ", "in_progress": "\033[36m▸\033[0m", "completed": "\033[32m✓\033[0m"}[t["status"]]
+        icon = {
+            "pending": " ",
+            "in_progress": "\033[36m▸\033[0m",
+            "completed": "\033[32m✓\033[0m",
+        }[t["status"]]
         lines.append(f"  [{icon}] {t['content']}")
     print("\n".join(lines))
     return f"Updated {len(CURRENT_TODOS)} tasks"
 
-TOOLS = [
-    {"type": "function", "name": "bash", "description": "Run a shell command.",
-     "parameters": {"type": "object", "properties": {"command": {"type": "string"}}, "required": ["command"]}},
-    {"type": "function", "name": "read_file", "description": "Read file contents.",
-     "parameters": {"type": "object", "properties": {"path": {"type": "string"}, "limit": {"type": "integer"}}, "required": ["path"]}},
-    {"type": "function", "name": "write_file", "description": "Write content to a file.",
-     "parameters": {"type": "object", "properties": {"path": {"type": "string"}, "content": {"type": "string"}}, "required": ["path", "content"]}},
-    {"type": "function", "name": "edit_file", "description": "Replace exact text in a file once.",
-     "parameters": {"type": "object", "properties": {"path": {"type": "string"}, "old_text": {"type": "string"}, "new_text": {"type": "string"}}, "required": ["path", "old_text", "new_text"]}},
-    {"type": "function", "name": "glob", "description": "Find files matching a glob pattern.",
-     "parameters": {"type": "object", "properties": {"pattern": {"type": "string"}}, "required": ["pattern"]}},
-    {"type": "function", "name": "todo_write", "description": "Create and manage a task list for your current coding session.",
-     "parameters": {"type": "object", "properties": {"todos": {"type": "array", "items": {"type": "object", "properties": {"content": {"type": "string"}, "status": {"type": "string", "enum": ["pending", "in_progress", "completed"]}}, "required": ["content", "status"]}}}, "required": ["todos"]}},
+
+def function_tool(
+    name: str, description: str, properties: dict, required: list[str]
+) -> dict:
+    return {
+        "type": "function",
+        "name": name,
+        "description": description,
+        "parameters": {
+            "type": "object",
+            "properties": properties,
+            "required": required,
+        },
+    }
+
+
+BASE_TOOLS = [
+    function_tool(
+        "bash", "Run a shell command.", {"command": {"type": "string"}}, ["command"]
+    ),
+    function_tool(
+        "read_file",
+        "Read file contents.",
+        {"path": {"type": "string"}, "limit": {"type": "integer"}},
+        ["path"],
+    ),
+    function_tool(
+        "write_file",
+        "Write content to a file.",
+        {"path": {"type": "string"}, "content": {"type": "string"}},
+        ["path", "content"],
+    ),
+    function_tool(
+        "edit_file",
+        "Replace exact text in a file once.",
+        {
+            "path": {"type": "string"},
+            "old_text": {"type": "string"},
+            "new_text": {"type": "string"},
+        },
+        ["path", "old_text", "new_text"],
+    ),
+    function_tool(
+        "glob",
+        "Find files matching a glob pattern.",
+        {"pattern": {"type": "string"}},
+        ["pattern"],
+    ),
 ]
 
-TOOL_HANDLERS = {
-    "bash": run_bash, "read_file": run_read, "write_file": run_write,
-    "edit_file": run_edit, "glob": run_glob, "todo_write": run_todo_write,
+TODO_TOOL = function_tool(
+    "todo_write",
+    "Create and manage a task list for your current coding session.",
+    {
+        "todos": {
+            "type": "array",
+            "items": {
+                "type": "object",
+                "properties": {
+                    "content": {"type": "string"},
+                    "status": {
+                        "type": "string",
+                        "enum": ["pending", "in_progress", "completed"],
+                    },
+                },
+                "required": ["content", "status"],
+            },
+        }
+    },
+    ["todos"],
+)
+
+TOOLS = [*BASE_TOOLS, TODO_TOOL]
+
+BASE_HANDLERS = {
+    "bash": run_bash,
+    "read_file": run_read,
+    "write_file": run_write,
+    "edit_file": run_edit,
+    "glob": run_glob,
 }
+
+TOOL_HANDLERS = {**BASE_HANDLERS, "todo_write": run_todo_write}
 
 
 # ═══════════════════════════════════════════════════════════
 #  NEW in s06: Subagent — fresh messages[], summary only
 # ═══════════════════════════════════════════════════════════
 
-SUB_TOOLS = [
-    {"type": "function", "name": "bash", "description": "Run a shell command.",
-     "parameters": {"type": "object", "properties": {"command": {"type": "string"}}, "required": ["command"]}},
-    {"type": "function", "name": "read_file", "description": "Read file contents.",
-     "parameters": {"type": "object", "properties": {"path": {"type": "string"}}, "required": ["path"]}},
-    {"type": "function", "name": "write_file", "description": "Write content to a file.",
-     "parameters": {"type": "object", "properties": {"path": {"type": "string"}, "content": {"type": "string"}}, "required": ["path", "content"]}},
-    {"type": "function", "name": "edit_file", "description": "Replace exact text in a file once.",
-     "parameters": {"type": "object", "properties": {"path": {"type": "string"}, "old_text": {"type": "string"}, "new_text": {"type": "string"}}, "required": ["path", "old_text", "new_text"]}},
-    {"type": "function", "name": "glob", "description": "Find files matching a glob pattern.",
-     "parameters": {"type": "object", "properties": {"pattern": {"type": "string"}}, "required": ["pattern"]}},
-]
+SUB_TOOLS = list(BASE_TOOLS)
 # NO "task" tool — prevent recursive spawning
 
-SUB_HANDLERS = {
-    "bash": run_bash, "read_file": run_read, "write_file": run_write,
-    "edit_file": run_edit, "glob": run_glob,
-}
+SUB_HANDLERS = BASE_HANDLERS
+
 
 def extract_text(content) -> str:
     """从 assistant 的 content 值或内容块列表中提取纯文本。"""
     if not isinstance(content, list):
         return str(content)
-    return "\n".join(getattr(b, "text", "") for b in content if getattr(b, "type", None) == "text")
+    return "\n".join(
+        getattr(b, "text", "") for b in content if getattr(b, "type", None) == "text"
+    )
+
 
 def spawn_subagent(description: str) -> str:
     """用隔离上下文运行子代理，并只返回它的最终总结。"""
     print(f"\n\033[35m[Subagent spawned]\033[0m")
     messages = [{"role": "user", "content": description}]  # fresh context
-
+    """
+        Python 的作用域只有 函数级 + 模块级 ， if / for / while / with 这些块都不会创建新作用域。
+        只要 for 循环至少执行过一次， response 在循环外就是可用的。
+    """
     for _ in range(30):  # safety limit
-        response = client.responses.create(
-            model=MODEL, instructions=SUB_SYSTEM,
-            input=messages, tools=SUB_TOOLS, max_output_tokens=8000,
+        response = create_response(
+            instructions=SUB_SYSTEM,
+            input=messages,
+            tools=SUB_TOOLS,
         )
-        messages.extend(response.output)
-        if not function_calls(response):
+        if response is None:
+            return "Subagent stopped because the OpenAI API request failed."
+        messages.extend(as_input_item(item) for item in response.output)
+        fcs = function_calls(response)
+        if not fcs:
             break
         results = []
-        for block in function_calls(response):
+        for block in fcs:
             if block.type == "function_call":
                 # Issue 1: subagent also runs hooks (permissions apply)
                 blocked = trigger_hooks("PreToolUse", block)
                 if blocked:
-                    results.append({"type": "function_call_output", "call_id": block.call_id,
-                                    "output": str(blocked)})
+                    results.append(
+                        {
+                            "type": "function_call_output",
+                            "call_id": block.call_id,
+                            "output": str(blocked),
+                        }
+                    )
                     continue
                 handler = SUB_HANDLERS.get(block.name)
-                output = handler(**call_args(block)) if handler else f"Unknown: {block.name}"
+                output = (
+                    handler(**call_args(block)) if handler else f"Unknown: {block.name}"
+                )
                 trigger_hooks("PostToolUse", block, output)
                 print(f"  \033[90m[sub] {block.name}: {str(output)[:100]}\033[0m")
-                results.append({"type": "function_call_output", "call_id": block.call_id,
-                                "output": output})
+                results.append(
+                    {
+                        "type": "function_call_output",
+                        "call_id": block.call_id,
+                        "output": output,
+                    }
+                )
         messages.extend(results)
 
     # Issue 5: fallback if safety limit hit during function_call
+    print(f"大模型返回: {response.output}")
+    # 从大模型返回中提取文本 最后一次的assistant消息
     result = response.output_text
     if not result:
         # last message is function_call_output, look backwards for assistant text
@@ -279,12 +412,16 @@ def spawn_subagent(description: str) -> str:
     print(f"\033[35m[Subagent done]\033[0m")
     return result  # only summary, entire message history discarded
 
+
 # Add task tool to parent's tools
-TOOLS.append({
-    "name": "task",
-    "description": "Launch a subagent to handle a complex subtask. Returns only the final conclusion.",
-    "parameters": {"type": "object", "properties": {"description": {"type": "string"}}, "required": ["description"]},
-})
+TOOLS.append(
+    function_tool(
+        "task",
+        "Launch a subagent to handle a complex subtask. Returns only the final conclusion.",
+        {"description": {"type": "string"}},
+        ["description"],
+    )
+)
 TOOL_HANDLERS["task"] = spawn_subagent
 
 
@@ -294,9 +431,11 @@ TOOL_HANDLERS["task"] = spawn_subagent
 
 HOOKS = {"UserPromptSubmit": [], "PreToolUse": [], "PostToolUse": [], "Stop": []}
 
+
 def register_hook(event: str, callback):
     """为指定 hook 事件注册一个回调函数。"""
     HOOKS[event].append(callback)
+
 
 def trigger_hooks(event: str, *args):
     """按顺序执行 hook 回调，并返回第一个非 None 结果。"""
@@ -306,7 +445,9 @@ def trigger_hooks(event: str, *args):
             return result
     return None
 
+
 DENY_LIST = ["rm -rf /", "sudo", "shutdown", "reboot", "mkfs", "dd if="]
+
 
 def permission_hook(block):
     """工具执行前（PreToolUse）：检查 bash 命令是否命中拒绝列表。"""
@@ -317,23 +458,30 @@ def permission_hook(block):
                 return "Permission denied"
     return None
 
+
 def log_hook(block):
     """工具执行前（PreToolUse）：记录即将执行的工具调用。"""
     print(f"\033[90m[HOOK] {block.name}\033[0m")
     return None
+
 
 def context_inject_hook(query: str):
     """用户提交提示后（UserPromptSubmit）：打印当前工作目录。"""
     print(f"\033[90m[HOOK] UserPromptSubmit: working in {WORKDIR}\033[0m")
     return None
 
+
 def summary_hook(messages: list):
     """停止前（Stop）：打印本轮会话的工具调用次数。"""
-    tool_count = sum(1 for m in messages
-                     for b in (m.get("content") if isinstance(m.get("content"), list) else [])
-                     if isinstance(b, dict) and b.get("type") == "function_call_output")
+    tool_count = sum(
+        1
+        for m in messages
+        for b in (m.get("content") if isinstance(m.get("content"), list) else [])
+        if isinstance(b, dict) and b.get("type") == "function_call_output"
+    )
     print(f"\033[90m[HOOK] Stop: session used {tool_count} tool calls\033[0m")
     return None
+
 
 register_hook("UserPromptSubmit", context_inject_hook)
 register_hook("PreToolUse", permission_hook)
@@ -347,51 +495,72 @@ register_hook("Stop", summary_hook)
 
 rounds_since_todo = 0
 
+
 def agent_loop(messages: list):
     """驱动父代理循环，分发工具调用，并提醒模型及时更新 todo。"""
     global rounds_since_todo
     while True:
         # s05: nag reminder
         if rounds_since_todo >= 3 and messages:
-            messages.append({"role": "user",
-                             "content": "<reminder>Update your todos.</reminder>"})
+            messages.append(
+                {"role": "user", "content": "<reminder>Update your todos.</reminder>"}
+            )
             rounds_since_todo = 0
 
-        response = client.responses.create(
-            model=MODEL, instructions=SYSTEM, input=messages,
-            tools=TOOLS, max_output_tokens=8000,
+        response = create_response(
+            instructions=SYSTEM,
+            input=messages,
+            tools=TOOLS,
         )
-        messages.extend(response.output)
+        if response is None:
+            return None
+        resdict = [as_input_item(item) for item in response.output]
+        print(f"大模型返回: {resdict}")
+        messages.extend(resdict)
 
-        if not function_calls(response):
+        fcs = function_calls(response)
+        if not fcs:
             force = trigger_hooks("Stop", messages)
             if force:
                 messages.append({"role": "user", "content": force})
                 continue
-            return
+            # 从大模型返回中提取文本 最后一次的assistant消息
+            return response
 
         rounds_since_todo += 1
         results = []
-        for block in function_calls(response):
+        for block in fcs:
             if block.type != "function_call":
                 continue
 
             blocked = trigger_hooks("PreToolUse", block)
             if blocked:
-                results.append({"type": "function_call_output", "call_id": block.call_id,
-                                "output": str(blocked)})
+                results.append(
+                    {
+                        "type": "function_call_output",
+                        "call_id": block.call_id,
+                        "output": str(blocked),
+                    }
+                )
                 continue
 
             handler = TOOL_HANDLERS.get(block.name)
-            output = handler(**call_args(block)) if handler else f"Unknown: {block.name}"
+            output = (
+                handler(**call_args(block)) if handler else f"Unknown: {block.name}"
+            )
 
             trigger_hooks("PostToolUse", block, output)
 
             if block.name == "todo_write":
                 rounds_since_todo = 0
 
-            results.append({"type": "function_call_output", "call_id": block.call_id,
-                            "output": output})
+            results.append(
+                {
+                    "type": "function_call_output",
+                    "call_id": block.call_id,
+                    "output": output,
+                }
+            )
 
         messages.extend(results)
 
@@ -412,5 +581,6 @@ if __name__ == "__main__":
         history.append({"role": "user", "content": query})
         response = agent_loop(history)
         if response and response.output_text:
+            # 从大模型返回中提取文本 最后一次的assistant消息
             print(response.output_text)
         print()
