@@ -121,6 +121,7 @@ def load_skill(name: str) -> str:
 ```sh
 cd learn-claude-code
 python s07_skill_loading/code.py
+python s07_skill_loading/code_openai.py
 ```
 
 试试这些 prompt：

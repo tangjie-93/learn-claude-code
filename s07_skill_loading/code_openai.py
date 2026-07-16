@@ -27,8 +27,13 @@ Needs: pip install openai python-dotenv pyyaml + OPENAI_API_KEY in .env
 """
 
 import os
+import sys
 from pathlib import Path
-import yaml
+
+try:
+    import yaml
+except ModuleNotFoundError:
+    yaml = None
 
 try:
     import readline
@@ -38,6 +43,10 @@ except ImportError:
     pass
 
 # ── Shared utilities (common/) ──────────────────────────
+PROJECT_ROOT = Path(__file__).resolve().parent.parent
+if str(PROJECT_ROOT) not in sys.path:
+    sys.path.insert(0, str(PROJECT_ROOT))
+
 from common.utils import (
     as_input_item,
     call_args,
@@ -77,29 +86,63 @@ CURRENT_TODOS: list[dict] = []
 tools_configure(WORKDIR, CURRENT_TODOS)
 
 
-# s07: Skill catalog scan (used by build_system below)
+# s07: 技能目录扫描（供下方 build_system 使用）
+def _parse_simple_frontmatter(raw: str) -> dict:
+    """在未安装 PyYAML 时，解析简单的 key: value 形式 frontmatter。"""
+    meta = {}
+    lines = raw.splitlines()
+    i = 0
+    while i < len(lines):
+        line = lines[i].strip()
+        if not line or line.startswith("#") or ":" not in line:
+            i += 1
+            continue
+        key, value = line.split(":", 1)
+        key = key.strip()
+        value = value.strip().strip("\"'")
+        if value in ("|", ">"):
+            block_lines = []
+            i += 1
+            while i < len(lines) and (lines[i].startswith(" ") or not lines[i].strip()):
+                block_line = lines[i].strip()
+                if block_line:
+                    block_lines.append(block_line)
+                i += 1
+            meta[key] = " ".join(block_lines)
+            continue
+        meta[key] = value
+        i += 1
+    return meta
+
+
 def _parse_frontmatter(text: str) -> tuple[dict, str]:
-    """Parse YAML frontmatter from SKILL.md. Returns (meta, body)."""
+    """解析 YAML frontmatter，返回 (元数据字典, 正文)。"""
     if not text.startswith("---"):
-        return {}, text
-    parts = text.split("---", 2)
+        return {}, text  # 没有 frontmatter，全文都是正文
+    parts = text.split("---", 2)  # 按前两个 --- 切分：["", "yaml内容", "正文"]
     if len(parts) < 3:
-        return {}, text
-    try:
-        meta = yaml.safe_load(parts[1]) or {}
-    except yaml.YAMLError:
-        meta = {}
+        return {}, text  # 格式不完整（只有开头 --- 没有结尾 ---）
+    if yaml is None:
+        meta = _parse_simple_frontmatter(parts[1])
+    else:
+        try:
+            meta = yaml.safe_load(parts[1]) or {}  # 解析 YAML 元数据
+        except yaml.YAMLError:
+            meta = {}  # YAML 语法错误，忽略元数据
     return meta, parts[2].strip()
 
 
-# Build skill registry at startup (used for safe lookup in load_skill)
+# 启动时构建技能注册表（供 load_skill 安全查找）
 SKILL_REGISTRY: dict[str, dict] = {}
 
 
 def _scan_skills():
-    """Scan skills/ dir, populate SKILL_REGISTRY with name/description/content."""
+    """扫描 skills/ 目录，将技能名称、描述、内容加载到 SKILL_REGISTRY 中。"""
     if not SKILLS_DIR.exists():
         return
+    # 递归扫描 skills/ 目录，查找所有子目录
+    # iterdir() 返回目录下所有文件和子目录的迭代器
+    # sorted() 对结果进行排序，确保按字母顺序处理
     for d in sorted(SKILLS_DIR.iterdir()):
         if not d.is_dir():
             continue
@@ -108,25 +151,26 @@ def _scan_skills():
             raw = manifest.read_text()
             meta, body = _parse_frontmatter(raw)
             name = meta.get("name", d.name)
-            desc = meta.get("description", raw.split("\n")[0].lstrip("#").strip())
-            SKILL_REGISTRY[name] = {"name": name, "description": desc, "content": raw}
+            desc = meta.get("description") or body.split("\n")[0].lstrip("#").strip()
+            SKILL_REGISTRY[name] = {"name": name, "description": desc, "content": body}
 
 
 _scan_skills()
 
 
 def list_skills() -> str:
-    """List all skills (name + one-line description)."""
+    """列出所有已注册技能（名称 + 一行描述）。"""
     if not SKILL_REGISTRY:
         return "(no skills found)"
+    # 把所有已注册的技能拼成一个 Markdown 格式的清单，用 \n （换行）连接
     return "\n".join(
         f"- **{s['name']}**: {s['description']}" for s in SKILL_REGISTRY.values()
     )
 
 
-# s07: SYSTEM includes skill catalog (cheap — just names + descriptions)
+# s07: SYSTEM prompt 中注入技能目录（轻量 — 仅名称 + 描述）
 def build_system() -> str:
-    """Build SYSTEM prompt with skill catalog injected at startup."""
+    """构建 SYSTEM prompt，启动时注入技能目录。"""
     catalog = list_skills()
     return (
         f"You are a coding agent at {WORKDIR}. "
@@ -137,7 +181,7 @@ def build_system() -> str:
 
 SYSTEM = build_system()
 
-# s07: subagent gets its own system prompt — no skill loading, no task
+# s07: 子 agent 使用独立的 system prompt — 无权加载技能或派发任务
 SUB_SYSTEM = (
     f"You are a coding agent at {WORKDIR}. "
     "Complete the task you were given, then return a concise summary. "
@@ -146,12 +190,12 @@ SUB_SYSTEM = (
 
 
 # ═══════════════════════════════════════════════════════════
-#  FROM s02-s06 (unchanged): Tool Implementations
+#  s02-s06 工具实现（已移至 common/）
 # ═══════════════════════════════════════════════════════════
 
 
 # ═══════════════════════════════════════════════════════════
-#  FROM s06 (unchanged): Subagent
+#  s06 子 Agent（已移至 common/，此处保留 spawn_subagent）
 # ═══════════════════════════════════════════════════════════
 
 SUB_TOOLS = [
@@ -220,10 +264,10 @@ SUB_HANDLERS = {
 
 
 def spawn_subagent(description: str) -> str:
-    """Run a subagent in isolated context. Returns only its final conclusion."""
+    """在隔离上下文中运行子 agent。仅返回最终结论，不保留内部消息历史。"""
     print(f"\n\033[35m[Subagent spawned]\033[0m")
     messages = [{"role": "user", "content": description}]
-    for _ in range(30):
+    for _ in range(30):  # 安全上限：最多 30 轮
         response = client.responses.create(
             model=MODEL,
             instructions=SUB_SYSTEM,
@@ -231,9 +275,9 @@ def spawn_subagent(description: str) -> str:
             tools=SUB_TOOLS,
             max_output_tokens=8000,
         )
-        messages.extend(response.output)
+        messages.extend(as_input_item(item) for item in response.output)
         if not function_calls(response):
-            break
+            break  # LLM 没有请求工具调用 → 得出最终结论，退出循环
         results = []
         for block in function_calls(response):
             if block.type == "function_call":
@@ -261,8 +305,10 @@ def spawn_subagent(description: str) -> str:
                     }
                 )
         messages.extend(results)
+    # 取最后一轮响应的纯文本作为结论
     result = response.output_text
     if not result:
+        # 兜底：如果 output_text 为空，从消息历史中反向查找最后一条 assistant 文本
         for msg in reversed(messages):
             if msg["role"] == "assistant":
                 result = extract_text(msg["content"])
@@ -275,12 +321,12 @@ def spawn_subagent(description: str) -> str:
 
 
 # ═══════════════════════════════════════════════════════════
-#  NEW in s07: load_skill — runtime full content loading
+#  s07 新增：load_skill — 按名称运行时加载完整技能内容
 # ═══════════════════════════════════════════════════════════
 
 
 def load_skill(name: str) -> str:
-    """Load full skill content. Lookup via registry — no path traversal."""
+    """按名称加载完整技能内容。通过注册表查找，无路径遍历风险。"""
     skill = SKILL_REGISTRY.get(name)
     if not skill:
         return f"Skill not found: {name}"
@@ -288,7 +334,7 @@ def load_skill(name: str) -> str:
 
 
 # ═══════════════════════════════════════════════════════════
-#  Tool Registry — all tools from s02-s07
+#  工具注册表 — s02 到 s07 的所有工具
 # ═══════════════════════════════════════════════════════════
 
 TOOLS = [
@@ -381,7 +427,7 @@ TOOLS = [
             "required": ["description"],
         },
     },
-    # s07: skill tool (catalog is already in SYSTEM prompt, this loads full content)
+    # s07: load_skill 工具（技能目录已在 SYSTEM prompt，此工具按需加载完整内容）
     {
         "type": "function",
         "name": "load_skill",
@@ -407,19 +453,19 @@ TOOL_HANDLERS = {
 
 
 # ═══════════════════════════════════════════════════════════
-#  FROM s04 (unchanged): Hook System
+#  s04 Hook 系统（不变）
 # ═══════════════════════════════════════════════════════════
 
 HOOKS = {"UserPromptSubmit": [], "PreToolUse": [], "PostToolUse": [], "Stop": []}
 
 
 def register_hook(event: str, callback):
-    """Register a callback for a hook event (UserPromptSubmit, PreToolUse, PostToolUse, Stop)."""
+    """为生命周期事件注册回调函数（UserPromptSubmit / PreToolUse / PostToolUse / Stop）。"""
     HOOKS[event].append(callback)
 
 
 def trigger_hooks(event: str, *args):
-    """Execute all callbacks for a hook event. Returns the first non-None result."""
+    """依次执行事件的所有回调，返回第一个非 None 结果（None 则继续执行下一个）。"""
     for callback in HOOKS[event]:
         result = callback(*args)
         if result is not None:
@@ -431,7 +477,7 @@ DENY_LIST = ["rm -rf /", "sudo", "shutdown", "reboot", "mkfs", "dd if="]
 
 
 def permission_hook(block):
-    """PreToolUse hook: deny dangerous bash commands from the deny list."""
+    """PreToolUse 钩子：拦截包含拒绝列表关键词的 bash 命令。"""
     if block.name == "bash":
         for p in DENY_LIST:
             if p in call_args(block).get("command", ""):
@@ -441,25 +487,32 @@ def permission_hook(block):
 
 
 def log_hook(block):
-    """PreToolUse hook: log every tool call to the console."""
+    """PreToolUse 钩子：在控制台记录每次工具调用。"""
     print(f"\033[90m[HOOK] {block.name}\033[0m")
     return None
 
 
 def context_inject_hook(query: str):
-    """UserPromptSubmit hook: inject working directory info before each message."""
+    """UserPromptSubmit 钩子：每次用户输入前打印当前工作目录。"""
     print(f"\033[90m[HOOK] UserPromptSubmit: working in {WORKDIR}\033[0m")
     return None
 
 
 def summary_hook(messages: list):
-    """Stop hook: print a summary of total tool calls in the session."""
-    tool_count = sum(
-        1
-        for m in messages
-        for b in (m.get("content") if isinstance(m.get("content"), list) else [])
-        if isinstance(b, dict) and b.get("type") == "function_call_output"
-    )
+    """Stop 钩子：会话结束时统计并输出工具调用总次数。"""
+    tool_count = 0
+    for item in messages:
+        if isinstance(item, dict) and item.get("type") == "function_call_output":
+            tool_count += 1
+            continue
+        content = item.get("content") if isinstance(item, dict) else None
+        if isinstance(content, list):
+            tool_count += sum(
+                1
+                for block in content
+                if isinstance(block, dict)
+                and block.get("type") == "function_call_output"
+            )
     print(f"\033[90m[HOOK] Stop: session used {tool_count} tool calls\033[0m")
     return None
 
@@ -471,22 +524,24 @@ register_hook("Stop", summary_hook)
 
 
 # ═══════════════════════════════════════════════════════════
-#  agent_loop — same as s05-s06 + nag reminder
+#  agent_loop — s05-s06 相同 + 催办提醒
 # ═══════════════════════════════════════════════════════════
 
 rounds_since_todo = 0
 
 
 def agent_loop(messages: list):
-    """Main agent loop: call LLM repeatedly, execute tools, inject todo reminders every 3 rounds."""
+    """主循环：反复调用 LLM → 执行工具 → 注入结果，每 3 轮提醒更新 todo。"""
     global rounds_since_todo
     while True:
+        # 催办机制：连续 3 轮未更新 todo → 注入提醒消息
         if rounds_since_todo >= 3 and messages:
             messages.append(
                 {"role": "user", "content": "<reminder>Update your todos.</reminder>"}
             )
             rounds_since_todo = 0
 
+        # 调用 LLM
         response = client.responses.create(
             model=MODEL,
             instructions=SYSTEM,
@@ -494,14 +549,17 @@ def agent_loop(messages: list):
             tools=TOOLS,
             max_output_tokens=8000,
         )
-        messages.extend(response.output)
+        resdict = [as_input_item(item) for item in response.output]
+        # 将 LLM 输出追加到消息历史（转为 dict 避免下次请求序列化报错）
+        messages.extend(resdict)
 
+        # 没有 function_call → LLM 认为任务完成，尝试触发 Stop hook
         if not function_calls(response):
             force = trigger_hooks("Stop", messages)
             if force:
                 messages.append({"role": "user", "content": force})
                 continue
-            return
+            return response
 
         rounds_since_todo += 1
         results = []
@@ -509,6 +567,7 @@ def agent_loop(messages: list):
             if block.type != "function_call":
                 continue
 
+            # PreToolUse 钩子：权限检查等
             blocked = trigger_hooks("PreToolUse", block)
             if blocked:
                 results.append(
@@ -520,6 +579,7 @@ def agent_loop(messages: list):
                 )
                 continue
 
+            # 根据工具名从 TOOL_HANDLERS 查找并执行
             handler = TOOL_HANDLERS.get(block.name)
             output = (
                 handler(**call_args(block)) if handler else f"Unknown: {block.name}"
@@ -527,6 +587,7 @@ def agent_loop(messages: list):
 
             trigger_hooks("PostToolUse", block, output)
 
+            # todo_write 是任务状态更新，调用后清零催办计数器
             if block.name == "todo_write":
                 rounds_since_todo = 0
 

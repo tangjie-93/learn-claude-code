@@ -1,11 +1,11 @@
-"""Pure utility functions — no module-level state dependencies."""
+"""纯工具函数 — 无模块级状态依赖。"""
 
 import ast
 import json
 
 
 def parse_arguments(raw) -> dict:
-    """Parse a native Responses API function-call argument string."""
+    """解析 OpenAI Responses API 函数调用的参数，保证返回 dict。"""
     try:
         parsed = json.loads(raw or "{}") if isinstance(raw, str) else raw
         return parsed if isinstance(parsed, dict) else {}
@@ -14,7 +14,7 @@ def parse_arguments(raw) -> dict:
 
 
 def function_calls(response):
-    """Return the native function_call output items from a response."""
+    """从 Responses API 响应中筛选出所有 function_call 项。"""
     return [
         item
         for item in response.output
@@ -23,19 +23,19 @@ def function_calls(response):
 
 
 def call_args(call) -> dict:
-    """Return a function call's parsed arguments."""
+    """便捷封装：返回函数调用的解析后参数。"""
     return parse_arguments(call.arguments)
 
 
 def as_input_item(item):
-    """Convert an OpenAI SDK response item into a plain dict for the next request."""
+    """将 OpenAI SDK 响应对象转为普通 dict，供下一轮请求使用（避免序列化报错）。"""
     if hasattr(item, "model_dump"):
         return item.model_dump(exclude_unset=True, mode="json")
     return item
 
 
 def extract_text(content) -> str:
-    """Extract plain text from assistant message content (handles both str and list formats)."""
+    """从 assistant 消息 content 中提取纯文本（兼容 str 和 list 两种格式）。"""
     if not isinstance(content, list):
         return str(content)
     return "\n".join(
@@ -44,17 +44,19 @@ def extract_text(content) -> str:
 
 
 def _normalize_todos(todos):
-    """Validate and normalize todo input into a list of dicts with content/status fields."""
+    """校验并标准化 todo 输入，返回 (任务列表, 错误信息)。"""
+    # LLM 可能传 JSON 字符串、Python 字面量字符串或 list，都要兜底
     if isinstance(todos, str):
         try:
             todos = json.loads(todos)
         except json.JSONDecodeError:
             try:
-                todos = ast.literal_eval(todos)
+                todos = ast.literal_eval(todos)  # 安全解析 Python 字面量
             except (SyntaxError, ValueError):
                 return None, "Error: todos must be a list or JSON array string"
     if not isinstance(todos, list):
         return None, "Error: todos must be a list"
+    # 逐项校验：每个元素必须是 dict，且含 content、status 字段
     for i, t in enumerate(todos):
         if not isinstance(t, dict):
             return None, f"Error: todos[{i}] must be an object"

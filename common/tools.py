@@ -1,6 +1,6 @@
-"""Tool implementations that depend on WORKDIR and CURRENT_TODOS.
+"""依赖 WORKDIR 和 CURRENT_TODOS 的工具实现。
 
-Call configure() once at startup to set the working directory.
+启动时调用 configure() 一次设置工作目录。
 """
 
 import subprocess
@@ -11,17 +11,17 @@ _current_todos: list[dict] = []
 
 
 def configure(workdir: Path, current_todos: list[dict] | None = None):
-    """Set the working directory and optional todo list reference."""
+    """设置工作目录和可选的 todo 列表引用。"""
     global _workdir, _current_todos
     _workdir = workdir
     if current_todos is not None:
         _current_todos = current_todos
 
 
-# ── Path safety ──────────────────────────────────────────
+# ── 路径安全 ──────────────────────────────────────────
 
 def safe_path(p: str, workdir: Path | None = None) -> Path:
-    """Resolve a user-supplied path under WORKDIR. Raises if path escapes workspace."""
+    """解析用户路径到工作区下，越界则抛出异常。"""
     base = workdir if workdir is not None else _workdir
     path = (base / p).resolve()
     if not path.is_relative_to(base):
@@ -29,10 +29,10 @@ def safe_path(p: str, workdir: Path | None = None) -> Path:
     return path
 
 
-# ── Tool implementations ─────────────────────────────────
+# ── 工具实现 ──────────────────────────────────────────
 
 def run_bash(command: str, cwd: Path | None = None) -> str:
-    """Execute a shell command via subprocess. Returns stdout/stderr or timeout message."""
+    """通过 subprocess 执行 shell 命令，返回 stdout/stderr 或超时信息。"""
     try:
         r = subprocess.run(
             command, shell=True, cwd=cwd if cwd is not None else _workdir,
@@ -45,7 +45,7 @@ def run_bash(command: str, cwd: Path | None = None) -> str:
 
 
 def run_read(path: str, limit: int | None = None, cwd: Path | None = None) -> str:
-    """Read a file's contents. Optionally limit to first N lines."""
+    """读取文件内容。可限制返回前 N 行。"""
     try:
         lines = safe_path(path, cwd).read_text().splitlines()
         if limit and limit < len(lines):
@@ -56,7 +56,7 @@ def run_read(path: str, limit: int | None = None, cwd: Path | None = None) -> st
 
 
 def run_write(path: str, content: str, cwd: Path | None = None) -> str:
-    """Write content to a file. Creates parent directories as needed."""
+    """将内容写入文件。自动创建不存在的父目录。"""
     try:
         file_path = safe_path(path, cwd)
         file_path.parent.mkdir(parents=True, exist_ok=True)
@@ -67,7 +67,7 @@ def run_write(path: str, content: str, cwd: Path | None = None) -> str:
 
 
 def run_edit(path: str, old_text: str, new_text: str) -> str:
-    """Replace the first occurrence of old_text with new_text in a file."""
+    """替换文件中首次出现的 old_text 为 new_text。"""
     try:
         file_path = safe_path(path)
         text = file_path.read_text()
@@ -80,7 +80,7 @@ def run_edit(path: str, old_text: str, new_text: str) -> str:
 
 
 def run_glob(pattern: str) -> str:
-    """Find files matching a glob pattern under WORKDIR."""
+    """查找工作区下匹配 glob 模式的文件。"""
     import glob as g
     try:
         results = []
@@ -93,7 +93,7 @@ def run_glob(pattern: str) -> str:
 
 
 def run_todo_write(todos: list) -> str:
-    """Update the global todo list. Validates state, enforces only one in_progress."""
+    """更新全局 todo 列表。校验状态，在控制台打印任务清单。"""
     from common.utils import _normalize_todos
 
     todos, error = _normalize_todos(todos)
@@ -101,11 +101,12 @@ def run_todo_write(todos: list) -> str:
         return error
     _current_todos.clear()
     _current_todos.extend(todos)
+    # 打印带状态图标的任务清单
     lines = ["\n\033[33m## Current Tasks\033[0m"]
     STATUS_ICONS = {
         "pending": " ",
-        "in_progress": "\033[36m▸\033[0m",
-        "completed": "\033[32m✓\033[0m",
+        "in_progress": "\033[36m▸\033[0m",   # 青色箭头
+        "completed": "\033[32m✓\033[0m",   # 绿色对勾
     }
     for t in _current_todos:
         icon = STATUS_ICONS[t["status"]]
