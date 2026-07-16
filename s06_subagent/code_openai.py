@@ -28,7 +28,7 @@ Run: python s06_subagent/code.py
 Needs: pip install openai python-dotenv + OPENAI_API_KEY in .env
 """
 
-import ast, json, os, subprocess
+import os
 from pathlib import Path
 
 try:
@@ -37,6 +37,26 @@ try:
     readline.parse_and_bind("set bind-tty-special-chars off")
 except ImportError:
     pass
+
+# ── Shared utilities (common/) ──────────────────────────
+from common.utils import (
+    as_input_item,
+    call_args,
+    extract_text,
+    function_calls,
+    parse_arguments,
+    _normalize_todos,
+)
+from common.tools import (
+    configure as tools_configure,
+    run_bash,
+    run_edit,
+    run_glob,
+    run_read,
+    run_todo_write,
+    run_write,
+    safe_path,
+)
 
 from openai import APIStatusError, OpenAI, OpenAIError
 from dotenv import load_dotenv
@@ -79,37 +99,8 @@ def create_response(*, instructions: str, input: list, tools: list):
         return None
 
 
-def parse_arguments(raw) -> dict:
-    """解析 Responses API 原生函数调用里的参数字符串。"""
-    try:
-        parsed = json.loads(raw or "{}") if isinstance(raw, str) else raw
-        return parsed if isinstance(parsed, dict) else {}
-    except json.JSONDecodeError:
-        return {}
-
-
-def as_input_item(item):
-    """把 OpenAI SDK 响应项转换成下一轮请求可接收的普通 dict。"""
-    if hasattr(item, "model_dump"):
-        return item.model_dump(exclude_unset=True, mode="json")
-    return item
-
-
-def function_calls(response):
-    """从一次响应中取出所有原生 function_call 输出项。"""
-    return [
-        item
-        for item in response.output
-        if getattr(item, "type", None) == "function_call"
-    ]
-
-
-def call_args(call) -> dict:
-    """返回某个函数调用已经解析好的参数字典。"""
-    return parse_arguments(call.arguments)
-
-
 CURRENT_TODOS: list[dict] = []
+tools_configure(WORKDIR, CURRENT_TODOS)
 
 SYSTEM = (
     f"You are a coding agent at {WORKDIR}. "
@@ -127,121 +118,6 @@ SUB_SYSTEM = (
 # ═══════════════════════════════════════════════════════════
 #  FROM s02-s05 (unchanged): Tool Implementations
 # ═══════════════════════════════════════════════════════════
-
-
-def safe_path(p: str) -> Path:
-    """把用户路径解析到 WORKDIR 内，并拒绝越界路径。"""
-    path = (WORKDIR / p).resolve()
-    if not path.is_relative_to(WORKDIR):
-        raise ValueError(f"Path escapes workspace: {p}")
-    return path
-
-
-def run_bash(command: str) -> str:
-    """在 WORKDIR 中执行 shell 命令，并返回合并后的 stdout/stderr 文本。"""
-    try:
-        r = subprocess.run(
-            command,
-            shell=True,
-            cwd=WORKDIR,
-            capture_output=True,
-            text=True,
-            timeout=120,
-        )
-        out = (r.stdout + r.stderr).strip()
-        return out[:50000] if out else "(no output)"
-    except subprocess.TimeoutExpired:
-        return "Error: Timeout (120s)"
-
-
-def run_read(path: str, limit: int | None = None) -> str:
-    """读取工作区文本文件，可选只返回前 limit 行。"""
-    try:
-        lines = safe_path(path).read_text().splitlines()
-        if limit and limit < len(lines):
-            lines = lines[:limit] + [f"... ({len(lines) - limit} more lines)"]
-        return "\n".join(lines)
-    except Exception as e:
-        return f"Error: {e}"
-
-
-def run_write(path: str, content: str) -> str:
-    """创建或覆盖工作区文件，并先补齐父目录。"""
-    try:
-        file_path = safe_path(path)
-        file_path.parent.mkdir(parents=True, exist_ok=True)
-        file_path.write_text(content)
-        return f"Wrote {len(content)} bytes to {path}"
-    except Exception as e:
-        return f"Error: {e}"
-
-
-def run_edit(path: str, old_text: str, new_text: str) -> str:
-    """在工作区文件中替换第一个精确匹配的 old_text。"""
-    try:
-        file_path = safe_path(path)
-        text = file_path.read_text()
-        if old_text not in text:
-            return f"Error: text not found in {path}"
-        file_path.write_text(text.replace(old_text, new_text, 1))
-        return f"Edited {path}"
-    except Exception as e:
-        return f"Error: {e}"
-
-
-def run_glob(pattern: str) -> str:
-    """返回匹配 glob 模式的工作区相对路径。"""
-    import glob as g
-
-    try:
-        results = []
-        for match in g.glob(pattern, root_dir=WORKDIR):
-            if (WORKDIR / match).resolve().is_relative_to(WORKDIR):
-                results.append(match)
-        return "\n".join(results) if results else "(no matches)"
-    except Exception as e:
-        return f"Error: {e}"
-
-
-def _normalize_todos(todos):
-    """解析并校验 todo_write 输入，再交给 CURRENT_TODOS 保存。"""
-    if isinstance(todos, str):
-        try:
-            todos = json.loads(todos)
-        except json.JSONDecodeError:
-            try:
-                todos = ast.literal_eval(todos)
-            except (SyntaxError, ValueError):
-                return None, "Error: todos must be a list or JSON array string"
-    if not isinstance(todos, list):
-        return None, "Error: todos must be a list"
-    for i, t in enumerate(todos):
-        if not isinstance(t, dict):
-            return None, f"Error: todos[{i}] must be an object"
-        if "content" not in t or "status" not in t:
-            return None, f"Error: todos[{i}] missing 'content' or 'status'"
-        if t["status"] not in ("pending", "in_progress", "completed"):
-            return None, f"Error: todos[{i}] has invalid status '{t['status']}'"
-    return todos, None
-
-
-def run_todo_write(todos: list) -> str:
-    """更新内存中的任务列表，并用状态图标打印出来。"""
-    global CURRENT_TODOS
-    todos, error = _normalize_todos(todos)
-    if error:
-        return error
-    CURRENT_TODOS = todos
-    lines = ["\n\033[33m## Current Tasks\033[0m"]
-    for t in CURRENT_TODOS:
-        icon = {
-            "pending": " ",
-            "in_progress": "\033[36m▸\033[0m",
-            "completed": "\033[32m✓\033[0m",
-        }[t["status"]]
-        lines.append(f"  [{icon}] {t['content']}")
-    print("\n".join(lines))
-    return f"Updated {len(CURRENT_TODOS)} tasks"
 
 
 def function_tool(
@@ -336,15 +212,6 @@ SUB_TOOLS = list(BASE_TOOLS)
 # NO "task" tool — prevent recursive spawning
 
 SUB_HANDLERS = BASE_HANDLERS
-
-
-def extract_text(content) -> str:
-    """从 assistant 的 content 值或内容块列表中提取纯文本。"""
-    if not isinstance(content, list):
-        return str(content)
-    return "\n".join(
-        getattr(b, "text", "") for b in content if getattr(b, "type", None) == "text"
-    )
 
 
 def spawn_subagent(description: str) -> str:

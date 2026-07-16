@@ -26,15 +26,36 @@ Run: python s07_skill_loading/code.py
 Needs: pip install openai python-dotenv pyyaml + OPENAI_API_KEY in .env
 """
 
-import ast, json, os, subprocess
+import os
 from pathlib import Path
 import yaml
 
 try:
     import readline
-    readline.parse_and_bind('set bind-tty-special-chars off')
+
+    readline.parse_and_bind("set bind-tty-special-chars off")
 except ImportError:
     pass
+
+# ── Shared utilities (common/) ──────────────────────────
+from common.utils import (
+    as_input_item,
+    call_args,
+    extract_text,
+    function_calls,
+    parse_arguments,
+    _normalize_todos,
+)
+from common.tools import (
+    configure as tools_configure,
+    run_bash,
+    run_edit,
+    run_glob,
+    run_read,
+    run_todo_write,
+    run_write,
+    safe_path,
+)
 
 from openai import OpenAI
 from dotenv import load_dotenv
@@ -51,26 +72,10 @@ MODEL = os.getenv("OPENAI_MODEL", "gpt-5.5")
 
 # OpenAI Responses API helpers
 
-def parse_arguments(raw) -> dict:
-    """Parse a native Responses API function-call argument string."""
-    try:
-        parsed = json.loads(raw or "{}") if isinstance(raw, str) else raw
-        return parsed if isinstance(parsed, dict) else {}
-    except json.JSONDecodeError:
-        return {}
-
-
-def function_calls(response):
-    """Return the native function_call output items from a response."""
-    return [item for item in response.output if getattr(item, "type", None) == "function_call"]
-
-
-def call_args(call) -> dict:
-    """Return a function call's parsed arguments."""
-    return parse_arguments(call.arguments)
-
 
 CURRENT_TODOS: list[dict] = []
+tools_configure(WORKDIR, CURRENT_TODOS)
+
 
 # s07: Skill catalog scan (used by build_system below)
 def _parse_frontmatter(text: str) -> tuple[dict, str]:
@@ -86,8 +91,10 @@ def _parse_frontmatter(text: str) -> tuple[dict, str]:
         meta = {}
     return meta, parts[2].strip()
 
+
 # Build skill registry at startup (used for safe lookup in load_skill)
 SKILL_REGISTRY: dict[str, dict] = {}
+
 
 def _scan_skills():
     """Scan skills/ dir, populate SKILL_REGISTRY with name/description/content."""
@@ -104,13 +111,18 @@ def _scan_skills():
             desc = meta.get("description", raw.split("\n")[0].lstrip("#").strip())
             SKILL_REGISTRY[name] = {"name": name, "description": desc, "content": raw}
 
+
 _scan_skills()
+
 
 def list_skills() -> str:
     """List all skills (name + one-line description)."""
     if not SKILL_REGISTRY:
         return "(no skills found)"
-    return "\n".join(f"- **{s['name']}**: {s['description']}" for s in SKILL_REGISTRY.values())
+    return "\n".join(
+        f"- **{s['name']}**: {s['description']}" for s in SKILL_REGISTRY.values()
+    )
+
 
 # s07: SYSTEM includes skill catalog (cheap — just names + descriptions)
 def build_system() -> str:
@@ -121,6 +133,7 @@ def build_system() -> str:
         f"Skills available:\n{catalog}\n"
         "Use load_skill to get full details when needed."
     )
+
 
 SYSTEM = build_system()
 
@@ -136,125 +149,88 @@ SUB_SYSTEM = (
 #  FROM s02-s06 (unchanged): Tool Implementations
 # ═══════════════════════════════════════════════════════════
 
-def safe_path(p: str) -> Path:
-    path = (WORKDIR / p).resolve()
-    if not path.is_relative_to(WORKDIR):
-        raise ValueError(f"Path escapes workspace: {p}")
-    return path
-
-def run_bash(command: str) -> str:
-    try:
-        r = subprocess.run(command, shell=True, cwd=WORKDIR,
-                           capture_output=True, text=True, timeout=120)
-        out = (r.stdout + r.stderr).strip()
-        return out[:50000] if out else "(no output)"
-    except subprocess.TimeoutExpired:
-        return "Error: Timeout (120s)"
-
-def run_read(path: str, limit: int | None = None) -> str:
-    try:
-        lines = safe_path(path).read_text().splitlines()
-        if limit and limit < len(lines):
-            lines = lines[:limit] + [f"... ({len(lines) - limit} more lines)"]
-        return "\n".join(lines)
-    except Exception as e:
-        return f"Error: {e}"
-
-def run_write(path: str, content: str) -> str:
-    try:
-        file_path = safe_path(path)
-        file_path.parent.mkdir(parents=True, exist_ok=True)
-        file_path.write_text(content)
-        return f"Wrote {len(content)} bytes to {path}"
-    except Exception as e:
-        return f"Error: {e}"
-
-def run_edit(path: str, old_text: str, new_text: str) -> str:
-    try:
-        file_path = safe_path(path)
-        text = file_path.read_text()
-        if old_text not in text:
-            return f"Error: text not found in {path}"
-        file_path.write_text(text.replace(old_text, new_text, 1))
-        return f"Edited {path}"
-    except Exception as e:
-        return f"Error: {e}"
-
-def run_glob(pattern: str) -> str:
-    import glob as g
-    try:
-        results = []
-        for match in g.glob(pattern, root_dir=WORKDIR):
-            if (WORKDIR / match).resolve().is_relative_to(WORKDIR):
-                results.append(match)
-        return "\n".join(results) if results else "(no matches)"
-    except Exception as e:
-        return f"Error: {e}"
-
-def _normalize_todos(todos):
-    if isinstance(todos, str):
-        try:
-            todos = json.loads(todos)
-        except json.JSONDecodeError:
-            try:
-                todos = ast.literal_eval(todos)
-            except (SyntaxError, ValueError):
-                return None, "Error: todos must be a list or JSON array string"
-    if not isinstance(todos, list):
-        return None, "Error: todos must be a list"
-    for i, t in enumerate(todos):
-        if not isinstance(t, dict):
-            return None, f"Error: todos[{i}] must be an object"
-        if "content" not in t or "status" not in t:
-            return None, f"Error: todos[{i}] missing 'content' or 'status'"
-        if t["status"] not in ("pending", "in_progress", "completed"):
-            return None, f"Error: todos[{i}] has invalid status '{t['status']}'"
-    return todos, None
-
-def run_todo_write(todos: list) -> str:
-    global CURRENT_TODOS
-    todos, error = _normalize_todos(todos)
-    if error:
-        return error
-    CURRENT_TODOS = todos
-    lines = ["\n\033[33m## Current Tasks\033[0m"]
-    for t in CURRENT_TODOS:
-        icon = {"pending": " ", "in_progress": "\033[36m▸\033[0m", "completed": "\033[32m✓\033[0m"}[t["status"]]
-        lines.append(f"  [{icon}] {t['content']}")
-    print("\n".join(lines))
-    return f"Updated {len(CURRENT_TODOS)} tasks"
-
-def extract_text(content) -> str:
-    if not isinstance(content, list):
-        return str(content)
-    return "\n".join(getattr(b, "text", "") for b in content if getattr(b, "type", None) == "text")
-
 
 # ═══════════════════════════════════════════════════════════
 #  FROM s06 (unchanged): Subagent
 # ═══════════════════════════════════════════════════════════
 
 SUB_TOOLS = [
-    {"type": "function", "name": "bash", "description": "Run a shell command.",
-     "parameters": {"type": "object", "properties": {"command": {"type": "string"}}, "required": ["command"]}},
-    {"type": "function", "name": "read_file", "description": "Read file contents.",
-     "parameters": {"type": "object", "properties": {"path": {"type": "string"}}, "required": ["path"]}},
-    {"type": "function", "name": "write_file", "description": "Write content to a file.",
-     "parameters": {"type": "object", "properties": {"path": {"type": "string"}, "content": {"type": "string"}}, "required": ["path", "content"]}},
-    {"type": "function", "name": "edit_file", "description": "Replace exact text in a file once.",
-     "parameters": {"type": "object", "properties": {"path": {"type": "string"}, "old_text": {"type": "string"}, "new_text": {"type": "string"}}, "required": ["path", "old_text", "new_text"]}},
-    {"type": "function", "name": "glob", "description": "Find files matching a glob pattern.",
-     "parameters": {"type": "object", "properties": {"pattern": {"type": "string"}}, "required": ["pattern"]}},
+    {
+        "type": "function",
+        "name": "bash",
+        "description": "Run a shell command.",
+        "parameters": {
+            "type": "object",
+            "properties": {"command": {"type": "string"}},
+            "required": ["command"],
+        },
+    },
+    {
+        "type": "function",
+        "name": "read_file",
+        "description": "Read file contents.",
+        "parameters": {
+            "type": "object",
+            "properties": {"path": {"type": "string"}},
+            "required": ["path"],
+        },
+    },
+    {
+        "type": "function",
+        "name": "write_file",
+        "description": "Write content to a file.",
+        "parameters": {
+            "type": "object",
+            "properties": {"path": {"type": "string"}, "content": {"type": "string"}},
+            "required": ["path", "content"],
+        },
+    },
+    {
+        "type": "function",
+        "name": "edit_file",
+        "description": "Replace exact text in a file once.",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "path": {"type": "string"},
+                "old_text": {"type": "string"},
+                "new_text": {"type": "string"},
+            },
+            "required": ["path", "old_text", "new_text"],
+        },
+    },
+    {
+        "type": "function",
+        "name": "glob",
+        "description": "Find files matching a glob pattern.",
+        "parameters": {
+            "type": "object",
+            "properties": {"pattern": {"type": "string"}},
+            "required": ["pattern"],
+        },
+    },
 ]
-SUB_HANDLERS = {"bash": run_bash, "read_file": run_read, "write_file": run_write,
-                "edit_file": run_edit, "glob": run_glob}
+SUB_HANDLERS = {
+    "bash": run_bash,
+    "read_file": run_read,
+    "write_file": run_write,
+    "edit_file": run_edit,
+    "glob": run_glob,
+}
+
 
 def spawn_subagent(description: str) -> str:
+    """Run a subagent in isolated context. Returns only its final conclusion."""
     print(f"\n\033[35m[Subagent spawned]\033[0m")
     messages = [{"role": "user", "content": description}]
     for _ in range(30):
-        response = client.responses.create(model=MODEL, instructions=SUB_SYSTEM,
-            input=messages, tools=SUB_TOOLS, max_output_tokens=8000)
+        response = client.responses.create(
+            model=MODEL,
+            instructions=SUB_SYSTEM,
+            input=messages,
+            tools=SUB_TOOLS,
+            max_output_tokens=8000,
+        )
         messages.extend(response.output)
         if not function_calls(response):
             break
@@ -263,14 +239,27 @@ def spawn_subagent(description: str) -> str:
             if block.type == "function_call":
                 blocked = trigger_hooks("PreToolUse", block)
                 if blocked:
-                    results.append({"type": "function_call_output", "call_id": block.call_id,
-                                    "output": str(blocked)})
+                    results.append(
+                        {
+                            "type": "function_call_output",
+                            "call_id": block.call_id,
+                            "output": str(blocked),
+                        }
+                    )
                     continue
                 handler = SUB_HANDLERS.get(block.name)
-                output = handler(**call_args(block)) if handler else f"Unknown: {block.name}"
+                output = (
+                    handler(**call_args(block)) if handler else f"Unknown: {block.name}"
+                )
                 trigger_hooks("PostToolUse", block, output)
                 print(f"  \033[90m[sub] {block.name}: {str(output)[:100]}\033[0m")
-                results.append({"type": "function_call_output", "call_id": block.call_id, "output": output})
+                results.append(
+                    {
+                        "type": "function_call_output",
+                        "call_id": block.call_id,
+                        "output": output,
+                    }
+                )
         messages.extend(results)
     result = response.output_text
     if not result:
@@ -289,6 +278,7 @@ def spawn_subagent(description: str) -> str:
 #  NEW in s07: load_skill — runtime full content loading
 # ═══════════════════════════════════════════════════════════
 
+
 def load_skill(name: str) -> str:
     """Load full skill content. Lookup via registry — no path traversal."""
     skill = SKILL_REGISTRY.get(name)
@@ -302,29 +292,117 @@ def load_skill(name: str) -> str:
 # ═══════════════════════════════════════════════════════════
 
 TOOLS = [
-    {"type": "function", "name": "bash", "description": "Run a shell command.",
-     "parameters": {"type": "object", "properties": {"command": {"type": "string"}}, "required": ["command"]}},
-    {"type": "function", "name": "read_file", "description": "Read file contents.",
-     "parameters": {"type": "object", "properties": {"path": {"type": "string"}, "limit": {"type": "integer"}}, "required": ["path"]}},
-    {"type": "function", "name": "write_file", "description": "Write content to a file.",
-     "parameters": {"type": "object", "properties": {"path": {"type": "string"}, "content": {"type": "string"}}, "required": ["path", "content"]}},
-    {"type": "function", "name": "edit_file", "description": "Replace exact text in a file once.",
-     "parameters": {"type": "object", "properties": {"path": {"type": "string"}, "old_text": {"type": "string"}, "new_text": {"type": "string"}}, "required": ["path", "old_text", "new_text"]}},
-    {"type": "function", "name": "glob", "description": "Find files matching a glob pattern.",
-     "parameters": {"type": "object", "properties": {"pattern": {"type": "string"}}, "required": ["pattern"]}},
-    {"type": "function", "name": "todo_write", "description": "Create and manage a task list for your current coding session.",
-     "parameters": {"type": "object", "properties": {"todos": {"type": "array", "items": {"type": "object", "properties": {"content": {"type": "string"}, "status": {"type": "string", "enum": ["pending", "in_progress", "completed"]}}, "required": ["content", "status"]}}}, "required": ["todos"]}},
-    {"type": "function", "name": "task", "description": "Launch a subagent to handle a complex subtask. Returns only the final conclusion.",
-     "parameters": {"type": "object", "properties": {"description": {"type": "string"}}, "required": ["description"]}},
+    {
+        "type": "function",
+        "name": "bash",
+        "description": "Run a shell command.",
+        "parameters": {
+            "type": "object",
+            "properties": {"command": {"type": "string"}},
+            "required": ["command"],
+        },
+    },
+    {
+        "type": "function",
+        "name": "read_file",
+        "description": "Read file contents.",
+        "parameters": {
+            "type": "object",
+            "properties": {"path": {"type": "string"}, "limit": {"type": "integer"}},
+            "required": ["path"],
+        },
+    },
+    {
+        "type": "function",
+        "name": "write_file",
+        "description": "Write content to a file.",
+        "parameters": {
+            "type": "object",
+            "properties": {"path": {"type": "string"}, "content": {"type": "string"}},
+            "required": ["path", "content"],
+        },
+    },
+    {
+        "type": "function",
+        "name": "edit_file",
+        "description": "Replace exact text in a file once.",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "path": {"type": "string"},
+                "old_text": {"type": "string"},
+                "new_text": {"type": "string"},
+            },
+            "required": ["path", "old_text", "new_text"],
+        },
+    },
+    {
+        "type": "function",
+        "name": "glob",
+        "description": "Find files matching a glob pattern.",
+        "parameters": {
+            "type": "object",
+            "properties": {"pattern": {"type": "string"}},
+            "required": ["pattern"],
+        },
+    },
+    {
+        "type": "function",
+        "name": "todo_write",
+        "description": "Create and manage a task list for your current coding session.",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "todos": {
+                    "type": "array",
+                    "items": {
+                        "type": "object",
+                        "properties": {
+                            "content": {"type": "string"},
+                            "status": {
+                                "type": "string",
+                                "enum": ["pending", "in_progress", "completed"],
+                            },
+                        },
+                        "required": ["content", "status"],
+                    },
+                }
+            },
+            "required": ["todos"],
+        },
+    },
+    {
+        "type": "function",
+        "name": "task",
+        "description": "Launch a subagent to handle a complex subtask. Returns only the final conclusion.",
+        "parameters": {
+            "type": "object",
+            "properties": {"description": {"type": "string"}},
+            "required": ["description"],
+        },
+    },
     # s07: skill tool (catalog is already in SYSTEM prompt, this loads full content)
-    {"type": "function", "name": "load_skill", "description": "Load the full content of a skill by name.",
-     "parameters": {"type": "object", "properties": {"name": {"type": "string"}}, "required": ["name"]}},
+    {
+        "type": "function",
+        "name": "load_skill",
+        "description": "Load the full content of a skill by name.",
+        "parameters": {
+            "type": "object",
+            "properties": {"name": {"type": "string"}},
+            "required": ["name"],
+        },
+    },
 ]
 
 TOOL_HANDLERS = {
-    "bash": run_bash, "read_file": run_read, "write_file": run_write,
-    "edit_file": run_edit, "glob": run_glob, "todo_write": run_todo_write,
-    "task": spawn_subagent, "load_skill": load_skill,
+    "bash": run_bash,
+    "read_file": run_read,
+    "write_file": run_write,
+    "edit_file": run_edit,
+    "glob": run_glob,
+    "todo_write": run_todo_write,
+    "task": spawn_subagent,
+    "load_skill": load_skill,
 }
 
 
@@ -334,19 +412,26 @@ TOOL_HANDLERS = {
 
 HOOKS = {"UserPromptSubmit": [], "PreToolUse": [], "PostToolUse": [], "Stop": []}
 
+
 def register_hook(event: str, callback):
+    """Register a callback for a hook event (UserPromptSubmit, PreToolUse, PostToolUse, Stop)."""
     HOOKS[event].append(callback)
 
+
 def trigger_hooks(event: str, *args):
+    """Execute all callbacks for a hook event. Returns the first non-None result."""
     for callback in HOOKS[event]:
         result = callback(*args)
         if result is not None:
             return result
     return None
 
+
 DENY_LIST = ["rm -rf /", "sudo", "shutdown", "reboot", "mkfs", "dd if="]
 
+
 def permission_hook(block):
+    """PreToolUse hook: deny dangerous bash commands from the deny list."""
     if block.name == "bash":
         for p in DENY_LIST:
             if p in call_args(block).get("command", ""):
@@ -354,20 +439,30 @@ def permission_hook(block):
                 return "Permission denied"
     return None
 
+
 def log_hook(block):
+    """PreToolUse hook: log every tool call to the console."""
     print(f"\033[90m[HOOK] {block.name}\033[0m")
     return None
 
+
 def context_inject_hook(query: str):
+    """UserPromptSubmit hook: inject working directory info before each message."""
     print(f"\033[90m[HOOK] UserPromptSubmit: working in {WORKDIR}\033[0m")
     return None
 
+
 def summary_hook(messages: list):
-    tool_count = sum(1 for m in messages
-                     for b in (m.get("content") if isinstance(m.get("content"), list) else [])
-                     if isinstance(b, dict) and b.get("type") == "function_call_output")
+    """Stop hook: print a summary of total tool calls in the session."""
+    tool_count = sum(
+        1
+        for m in messages
+        for b in (m.get("content") if isinstance(m.get("content"), list) else [])
+        if isinstance(b, dict) and b.get("type") == "function_call_output"
+    )
     print(f"\033[90m[HOOK] Stop: session used {tool_count} tool calls\033[0m")
     return None
+
 
 register_hook("UserPromptSubmit", context_inject_hook)
 register_hook("PreToolUse", permission_hook)
@@ -381,17 +476,23 @@ register_hook("Stop", summary_hook)
 
 rounds_since_todo = 0
 
+
 def agent_loop(messages: list):
+    """Main agent loop: call LLM repeatedly, execute tools, inject todo reminders every 3 rounds."""
     global rounds_since_todo
     while True:
         if rounds_since_todo >= 3 and messages:
-            messages.append({"role": "user",
-                             "content": "<reminder>Update your todos.</reminder>"})
+            messages.append(
+                {"role": "user", "content": "<reminder>Update your todos.</reminder>"}
+            )
             rounds_since_todo = 0
-            
+
         response = client.responses.create(
-            model=MODEL, instructions=SYSTEM, input=messages,
-            tools=TOOLS, max_output_tokens=8000,
+            model=MODEL,
+            instructions=SYSTEM,
+            input=messages,
+            tools=TOOLS,
+            max_output_tokens=8000,
         )
         messages.extend(response.output)
 
@@ -410,20 +511,32 @@ def agent_loop(messages: list):
 
             blocked = trigger_hooks("PreToolUse", block)
             if blocked:
-                results.append({"type": "function_call_output", "call_id": block.call_id,
-                                "output": str(blocked)})
+                results.append(
+                    {
+                        "type": "function_call_output",
+                        "call_id": block.call_id,
+                        "output": str(blocked),
+                    }
+                )
                 continue
 
             handler = TOOL_HANDLERS.get(block.name)
-            output = handler(**call_args(block)) if handler else f"Unknown: {block.name}"
+            output = (
+                handler(**call_args(block)) if handler else f"Unknown: {block.name}"
+            )
 
             trigger_hooks("PostToolUse", block, output)
 
             if block.name == "todo_write":
                 rounds_since_todo = 0
 
-            results.append({"type": "function_call_output", "call_id": block.call_id,
-                            "output": output})
+            results.append(
+                {
+                    "type": "function_call_output",
+                    "call_id": block.call_id,
+                    "output": output,
+                }
+            )
 
         messages.extend(results)
 

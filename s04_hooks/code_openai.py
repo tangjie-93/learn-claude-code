@@ -48,7 +48,7 @@ Run: python s04_hooks/code.py
 Needs: pip install openai python-dotenv + OPENAI_API_KEY in .env
 """
 
-import json, os, subprocess
+import os
 from pathlib import Path
 
 try:
@@ -61,6 +61,10 @@ try:
 except ImportError:
     pass
 
+# ── Shared utilities (common/) ──────────────────────────
+from common.utils import as_input_item, call_args, extract_text, function_calls, parse_arguments
+from common.tools import configure as tools_configure, run_bash, run_edit, run_glob, run_read, run_write, safe_path
+
 from openai import OpenAI
 from dotenv import load_dotenv
 
@@ -70,123 +74,16 @@ if os.getenv("OPENAI_BASE_URL"):
     client_kwargs["base_url"] = os.environ["OPENAI_BASE_URL"]
 
 WORKDIR = Path.cwd()
+tools_configure(WORKDIR)
 client = OpenAI(**client_kwargs)
 MODEL = os.getenv("OPENAI_MODEL", "gpt-5.5")
-
-# OpenAI Responses API helpers
-
-
-def parse_arguments(raw) -> dict:
-    """将 OpenAI 函数调用携带的 JSON 参数解析为字典；解析失败时返回空字典。"""
-    try:
-        parsed = json.loads(raw or "{}") if isinstance(raw, str) else raw
-        return parsed if isinstance(parsed, dict) else {}
-    except json.JSONDecodeError:
-        return {}
-
-
-def function_calls(response):
-    """从一次 OpenAI 响应中筛选出所有 function_call 类型的输出项。"""
-    return [
-        item
-        for item in response.output
-        if getattr(item, "type", None) == "function_call"
-    ]
-
-
-def call_args(call) -> dict:
-    """读取并解析单个函数调用的参数，供工具处理函数使用。"""
-    return parse_arguments(call.arguments)
-
-
-def as_input_item(item):
-    """将 OpenAI SDK 响应项转换为下一轮请求可接收的普通字典。"""
-    if hasattr(item, "model_dump"):
-        return item.model_dump(exclude_unset=True, mode="json")
-    return item
-
 
 SYSTEM = f"You are a coding agent at {WORKDIR}. Use tools to solve tasks. Act, don't explain."
 
 
 # ═══════════════════════════════════════════════════════════
-#  FROM s02-s03 (unchanged): Tool Implementations
+#  Tool Definitions & Dispatch
 # ═══════════════════════════════════════════════════════════
-
-
-def safe_path(p: str) -> Path:
-    """将用户路径解析为工作目录内的绝对路径，拒绝越出工作区的访问。"""
-    path = (WORKDIR / p).resolve()
-    if not path.is_relative_to(WORKDIR):
-        raise ValueError(f"Path escapes workspace: {p}")
-    return path
-
-
-def run_bash(command: str) -> str:
-    """在工作目录执行一条 Shell 命令，并返回标准输出、错误输出或超时提示。"""
-    try:
-        r = subprocess.run(
-            command,
-            shell=True,
-            cwd=WORKDIR,
-            capture_output=True,
-            text=True,
-            timeout=120,
-        )
-        out = (r.stdout + r.stderr).strip()
-        return out[:50000] if out else "(no output)"
-    except subprocess.TimeoutExpired:
-        return "Error: Timeout (120s)"
-
-
-def run_read(path: str, limit: int | None = None) -> str:
-    """读取工作目录内的文本文件；可选地限制返回的行数。"""
-    try:
-        lines = safe_path(path).read_text().splitlines()
-        if limit and limit < len(lines):
-            lines = lines[:limit] + [f"... ({len(lines) - limit} more lines)"]
-        return "\n".join(lines)
-    except Exception as e:
-        return f"Error: {e}"
-
-
-def run_write(path: str, content: str) -> str:
-    """在工作目录内创建或覆盖文本文件，并自动创建缺失的父目录。"""
-    try:
-        file_path = safe_path(path)
-        file_path.parent.mkdir(parents=True, exist_ok=True)
-        file_path.write_text(content)
-        return f"Wrote {len(content)} bytes to {path}"
-    except Exception as e:
-        return f"Error: {e}"
-
-
-def run_edit(path: str, old_text: str, new_text: str) -> str:
-    """将文件中首次出现的 old_text 替换为 new_text，并返回处理结果。"""
-    try:
-        file_path = safe_path(path)
-        text = file_path.read_text()
-        if old_text not in text:
-            return f"Error: text not found in {path}"
-        file_path.write_text(text.replace(old_text, new_text, 1))
-        return f"Edited {path}"
-    except Exception as e:
-        return f"Error: {e}"
-
-
-def run_glob(pattern: str) -> str:
-    """按通配模式查找工作目录内的安全路径，并以相对路径列表形式返回。"""
-    import glob as g
-
-    try:
-        results = []
-        for match in g.glob(pattern, root_dir=WORKDIR):
-            if (WORKDIR / match).resolve().is_relative_to(WORKDIR):
-                results.append(match)
-        return "\n".join(results) if results else "(no matches)"
-    except Exception as e:
-        return f"Error: {e}"
-
 
 TOOLS = [
     {

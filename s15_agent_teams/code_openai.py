@@ -20,7 +20,7 @@ ASCII flow:
   Teammate: inbox → LLM → bash/read/write/send → loop (max 10 turns)
 """
 
-import os, subprocess, json, time, random, threading, queue
+import os, json, time, random, threading, queue
 from pathlib import Path
 from datetime import datetime
 from dataclasses import dataclass, asdict
@@ -31,6 +31,10 @@ try:
 except ImportError:
     pass
 
+# ── Shared utilities (common/) ──────────────────────────
+from common.utils import as_input_item, call_args, extract_text, function_calls, parse_arguments, _normalize_todos
+from common.tools import configure as tools_configure, run_bash as _run_bash, run_edit, run_glob, run_read, run_todo_write, run_write, safe_path
+
 from openai import OpenAI
 from dotenv import load_dotenv
 
@@ -40,32 +44,16 @@ if os.getenv("OPENAI_BASE_URL"):
     client_kwargs["base_url"] = os.environ["OPENAI_BASE_URL"]
 
 WORKDIR = Path.cwd()
+tools_configure(WORKDIR)
+
+# Bridge: common run_bash only accepts command; s13-s15 pass run_in_background
+def run_bash(command: str, run_in_background: bool = False) -> str:
+    return _run_bash(command)
+
 MEMORY_DIR = WORKDIR / ".memory"
 MEMORY_INDEX = MEMORY_DIR / "MEMORY.md"
 client = OpenAI(**client_kwargs)
 MODEL = os.getenv("OPENAI_MODEL", "gpt-5.5")
-
-# OpenAI Responses API helpers
-
-def parse_arguments(raw) -> dict:
-    """Parse a native Responses API function-call argument string."""
-    try:
-        parsed = json.loads(raw or "{}") if isinstance(raw, str) else raw
-        return parsed if isinstance(parsed, dict) else {}
-    except json.JSONDecodeError:
-        return {}
-
-
-def function_calls(response):
-    """Return the native function_call output items from a response."""
-    return [item for item in response.output if getattr(item, "type", None) == "function_call"]
-
-
-def call_args(call) -> dict:
-    """Return a function call's parsed arguments."""
-    return parse_arguments(call.arguments)
-
-
 
 # ── Task System (from s12, synced) ──
 
@@ -195,46 +183,6 @@ def get_system_prompt(context: dict) -> str:
     _last_context_key = key
     _last_prompt = assemble_system_prompt(context)
     return _last_prompt
-
-
-# ── Tools ──
-
-def safe_path(p: str) -> Path:
-    path = (WORKDIR / p).resolve()
-    if not path.is_relative_to(WORKDIR):
-        raise ValueError(f"Path escapes workspace: {p}")
-    return path
-
-
-def run_bash(command: str, run_in_background: bool = False) -> str:
-    # run_in_background is handled by agent_loop dispatch, not here
-    try:
-        r = subprocess.run(command, shell=True, cwd=WORKDIR,
-                           capture_output=True, text=True, timeout=120)
-        out = (r.stdout + r.stderr).strip()
-        return out[:50000] if out else "(no output)"
-    except subprocess.TimeoutExpired:
-        return "Error: Timeout (120s)"
-
-
-def run_read(path: str, limit: int | None = None) -> str:
-    try:
-        lines = safe_path(path).read_text().splitlines()
-        if limit and limit < len(lines):
-            lines = lines[:limit] + [f"... ({len(lines) - limit} more lines)"]
-        return "\n".join(lines)
-    except Exception as e:
-        return f"Error: {e}"
-
-
-def run_write(path: str, content: str) -> str:
-    try:
-        fp = safe_path(path)
-        fp.parent.mkdir(parents=True, exist_ok=True)
-        fp.write_text(content)
-        return f"Wrote {len(content)} bytes to {path}"
-    except Exception as e:
-        return f"Error: {e}"
 
 
 # Task tools

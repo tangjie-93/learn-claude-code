@@ -24,7 +24,7 @@ Builds on s08 (context compact). Usage:
     Needs: pip install openai python-dotenv + OPENAI_API_KEY in .env
 """
 
-import os, subprocess, json, time, re
+import os, json, time, re
 from pathlib import Path
 
 try:
@@ -33,12 +33,17 @@ try:
 except ImportError:
     pass
 
+# ── Shared utilities (common/) ──────────────────────────
+from common.utils import as_input_item, call_args, extract_text, function_calls, parse_arguments
+from common.tools import configure as tools_configure, run_bash, run_edit, run_glob, run_read, run_write, safe_path
+
 from openai import OpenAI
 from dotenv import load_dotenv
 
 load_dotenv(override=True)
 
 WORKDIR = Path.cwd()
+tools_configure(WORKDIR)
 MEMORY_DIR = WORKDIR / ".memory"; MEMORY_DIR.mkdir(exist_ok=True)
 MEMORY_INDEX = MEMORY_DIR / "MEMORY.md"
 SKILLS_DIR = WORKDIR / "skills"
@@ -49,23 +54,7 @@ MODEL = os.getenv("OPENAI_MODEL", "gpt-5.5")
 
 # OpenAI Responses API helpers
 
-def parse_arguments(raw) -> dict:
-    """Parse a native Responses API function-call argument string."""
-    try:
-        parsed = json.loads(raw or "{}") if isinstance(raw, str) else raw
-        return parsed if isinstance(parsed, dict) else {}
-    except json.JSONDecodeError:
-        return {}
 
-
-def function_calls(response):
-    """Return the native function_call output items from a response."""
-    return [item for item in response.output if getattr(item, "type", None) == "function_call"]
-
-
-def call_args(call) -> dict:
-    """Return a function call's parsed arguments."""
-    return parse_arguments(call.arguments)
 
 
 
@@ -376,53 +365,7 @@ SUB_SYSTEM = (
 #  FROM s02-s08 (skeleton): Basic tools
 # ═══════════════════════════════════════════════════════════
 
-def safe_path(p: str) -> Path:
-    path = (WORKDIR / p).resolve()
-    if not path.is_relative_to(WORKDIR): raise ValueError(f"Path escapes workspace: {p}")
-    return path
 
-def run_bash(command: str) -> str:
-    try:
-        r = subprocess.run(command, shell=True, cwd=WORKDIR, capture_output=True, text=True, timeout=120)
-        out = (r.stdout + r.stderr).strip()
-        return out[:50000] if out else "(no output)"
-    except subprocess.TimeoutExpired: return "Error: Timeout (120s)"
-
-def run_read(path: str, limit: int | None = None) -> str:
-    try:
-        lines = safe_path(path).read_text().splitlines()
-        if limit and limit < len(lines): lines = lines[:limit] + [f"... ({len(lines) - limit} more lines)"]
-        return "\n".join(lines)
-    except Exception as e: return f"Error: {e}"
-
-def run_write(path: str, content: str) -> str:
-    try:
-        file_path = safe_path(path); file_path.parent.mkdir(parents=True, exist_ok=True)
-        file_path.write_text(content); return f"Wrote {len(content)} bytes to {path}"
-    except Exception as e: return f"Error: {e}"
-
-def run_edit(path: str, old_text: str, new_text: str) -> str:
-    try:
-        file_path = safe_path(path)
-        text = file_path.read_text()
-        if old_text not in text: return f"Error: text not found in {path}"
-        file_path.write_text(text.replace(old_text, new_text, 1))
-        return f"Edited {path}"
-    except Exception as e: return f"Error: {e}"
-
-def run_glob(pattern: str) -> str:
-    import glob as g
-    try:
-        results = []
-        for match in g.glob(pattern, root_dir=WORKDIR):
-            if (WORKDIR / match).resolve().is_relative_to(WORKDIR):
-                results.append(match)
-        return "\n".join(results) if results else "(no matches)"
-    except Exception as e: return f"Error: {e}"
-
-def extract_text(content) -> str:
-    if not isinstance(content, list): return str(content)
-    return "\n".join(getattr(b, "text", "") for b in content if getattr(b, "type", None) == "text")
 
 # Subagent (simplified from s06-s07)
 SUB_TOOLS = [

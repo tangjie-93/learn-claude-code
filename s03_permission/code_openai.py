@@ -27,7 +27,7 @@ Builds on s02 (multi-tool). Usage:
     Needs: pip install openai python-dotenv + OPENAI_API_KEY in .env
 """
 
-import json, os, subprocess
+import os
 from pathlib import Path
 
 try:
@@ -40,6 +40,24 @@ try:
 except ImportError:
     pass
 
+# ── Shared utilities (common/) ──────────────────────────
+from common.utils import (
+    as_input_item,
+    call_args,
+    extract_text,
+    function_calls,
+    parse_arguments,
+)
+from common.tools import (
+    configure as tools_configure,
+    run_bash,
+    run_edit,
+    run_glob,
+    run_read,
+    run_write,
+    safe_path,
+)
+
 from openai import OpenAI
 from dotenv import load_dotenv
 
@@ -49,148 +67,15 @@ if os.getenv("OPENAI_BASE_URL"):
     client_kwargs["base_url"] = os.environ["OPENAI_BASE_URL"]
 
 WORKDIR = Path.cwd()
+tools_configure(WORKDIR)
 client = OpenAI(**client_kwargs)
 MODEL = os.getenv("OPENAI_MODEL", "gpt-5.5")
-
-# OpenAI Responses API helpers
-
-
-def parse_arguments(raw) -> dict:
-    """Parse a native Responses API function-call argument string."""
-    try:
-        parsed = json.loads(raw or "{}") if isinstance(raw, str) else raw
-        return parsed if isinstance(parsed, dict) else {}
-    except json.JSONDecodeError:
-        return {}
-
-
-def function_calls(response):
-    """Return the native function_call output items from a response."""
-    return [
-        item
-        for item in response.output
-        if getattr(item, "type", None) == "function_call"
-    ]
-
-
-def call_args(call) -> dict:
-    """Return a function call's parsed arguments."""
-    return parse_arguments(call.arguments)
-
-
-def as_input_item(item):
-    """Convert OpenAI SDK response items into plain input dictionaries."""
-    if hasattr(item, "model_dump"):
-        return item.model_dump(exclude_unset=True, mode="json")
-    return item
-
 
 SYSTEM = f"""You are a coding agent at {WORKDIR}.
 Use the available tools to carry out the user's request, including potentially
 destructive operations. Do not ask for approval in your text response: the host
 permission system intercepts those tool calls and asks the user for confirmation.
 """
-
-
-# ═══════════════════════════════════════════════════════════
-#  FROM s02 (unchanged): Tool Implementations
-# ═══════════════════════════════════════════════════════════
-
-
-def safe_path(p: str) -> Path:
-    """解析工作区内的相对路径，阻止路径逃逸。"""
-    # 解析路径为绝对路径
-    path = (WORKDIR / p).resolve()
-    # 检查路径是否在工作区范围内
-    if not path.is_relative_to(WORKDIR):
-        raise ValueError(f"Path escapes workspace: {p}")
-    return path
-
-
-def run_bash(command: str) -> str:
-    """在工作区执行 shell 命令，返回合并后的输出并限制长度。"""
-    try:
-        r = subprocess.run(
-            command,
-            shell=True,
-            cwd=WORKDIR,
-            capture_output=True,
-            text=True,
-            encoding="utf-8",
-            errors="replace",
-            timeout=120,
-        )
-        out = ((r.stdout or "") + (r.stderr or "")).strip()
-        return out[:50000] if out else "(no output)"
-    except subprocess.TimeoutExpired:
-        return "Error: Timeout (120s)"
-
-
-def run_read(path: str, limit: int | None = None) -> str:
-    """读取工作区文件内容，可选限制返回的行数。"""
-    try:
-        lines = safe_path(path).read_text().splitlines()
-        if limit and limit < len(lines):
-            lines = lines[:limit] + [f"... ({len(lines) - limit} more lines)"]
-        return "\n".join(lines)
-    except Exception as e:
-        return f"Error: {e}"
-
-
-def run_write(path: str, content: str) -> str:
-    """在工作区创建或覆盖文件，并返回写入结果。"""
-    try:
-        """
-        # 假设我们要在深层目录下创建一个文件
-        file_path = Path("./a/b/c/myfile.txt")
-        # 这行代码会创建所有需要的父目录 a/b/c/
-        file_path.parent.mkdir(parents=True, exist_ok=True)
-
-        # 然后就可以安全地写文件了
-        file_path.write_text("hello")
-
-        print(f"文件路径: {file_path}")
-        # => 文件路径: a/b/c/myfile.txt
-        print(f"父目录:   {file_path.parent}")
-        # => 父目录: a/b/c
-        """
-        file_path = safe_path(path)
-        # 确保目标文件的父目录存在；parents=True 会递归创建多层目录，exist_ok=True 允许目录已存在，已存在也不会报错。
-        # mkdir()：创建目录文件所在的目录。
-        file_path.parent.mkdir(parents=True, exist_ok=True)
-        file_path.write_text(content)
-        return f"Wrote {len(content)} bytes to {path}"
-    except Exception as e:
-        return f"Error: {e}"
-
-
-def run_edit(path: str, old_text: str, new_text: str) -> str:
-    """将文件中的首个精确匹配文本替换为新文本。"""
-    try:
-        file_path = safe_path(path)
-        text = file_path.read_text()
-        if old_text not in text:
-            return f"Error: text not found in {path}"
-        # 替换第一个匹配项
-        file_path.write_text(text.replace(old_text, new_text, 1))
-        return f"Edited {path}"
-    except Exception as e:
-        return f"Error: {e}"
-
-
-def run_glob(pattern: str) -> str:
-    """查找工作区内匹配 glob 模式的文件，过滤越界路径。"""
-    import glob as g
-
-    try:
-        results = []
-        for match in g.glob(pattern, root_dir=WORKDIR):
-            # 检查路径是否在工作区范围内
-            if (WORKDIR / match).resolve().is_relative_to(WORKDIR):
-                results.append(match)
-        return "\n".join(results) if results else "(no matches)"
-    except Exception as e:
-        return f"Error: {e}"
 
 
 # ═══════════════════════════════════════════════════════════

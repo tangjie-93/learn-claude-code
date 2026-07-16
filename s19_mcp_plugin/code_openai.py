@@ -32,6 +32,10 @@ try:
 except ImportError:
     pass
 
+# ── Shared utilities (common/) ──────────────────────────
+from common.utils import as_input_item, call_args, extract_text, function_calls, parse_arguments, _normalize_todos
+from common.tools import configure as tools_configure, run_bash, run_edit, run_glob, run_read, run_todo_write, run_write, safe_path
+
 from openai import OpenAI
 from dotenv import load_dotenv
 
@@ -41,30 +45,9 @@ if os.getenv("OPENAI_BASE_URL"):
     client_kwargs["base_url"] = os.environ["OPENAI_BASE_URL"]
 
 WORKDIR = Path.cwd()
+tools_configure(WORKDIR)
 client = OpenAI(**client_kwargs)
 MODEL = os.getenv("OPENAI_MODEL", "gpt-5.5")
-
-# OpenAI Responses API helpers
-
-def parse_arguments(raw) -> dict:
-    """Parse a native Responses API function-call argument string."""
-    try:
-        parsed = json.loads(raw or "{}") if isinstance(raw, str) else raw
-        return parsed if isinstance(parsed, dict) else {}
-    except json.JSONDecodeError:
-        return {}
-
-
-def function_calls(response):
-    """Return the native function_call output items from a response."""
-    return [item for item in response.output if getattr(item, "type", None) == "function_call"]
-
-
-def call_args(call) -> dict:
-    """Return a function call's parsed arguments."""
-    return parse_arguments(call.arguments)
-
-
 
 # ── Task System ──
 
@@ -291,46 +274,6 @@ def assemble_system_prompt(context: dict) -> str:
     if mcp_names:
         sections.append(f"Connected MCP servers: {', '.join(mcp_names)}")
     return "\n\n".join(sections)
-
-
-# ── Basic Tools ──
-
-def safe_path(p: str, cwd: Path = None) -> Path:
-    base = cwd or WORKDIR
-    path = (base / p).resolve()
-    if not path.is_relative_to(base):
-        raise ValueError(f"Path escapes workspace: {p}")
-    return path
-
-
-def run_bash(command: str, cwd: Path = None) -> str:
-    try:
-        r = subprocess.run(command, shell=True, cwd=cwd or WORKDIR,
-                           capture_output=True, text=True, timeout=120)
-        out = (r.stdout + r.stderr).strip()
-        return out[:50000] if out else "(no output)"
-    except subprocess.TimeoutExpired:
-        return "Error: Timeout (120s)"
-
-
-def run_read(path: str, limit: int | None = None, cwd: Path = None) -> str:
-    try:
-        lines = safe_path(path, cwd).read_text().splitlines()
-        if limit and limit < len(lines):
-            lines = lines[:limit] + [f"... ({len(lines) - limit} more lines)"]
-        return "\n".join(lines)
-    except Exception as e:
-        return f"Error: {e}"
-
-
-def run_write(path: str, content: str, cwd: Path = None) -> str:
-    try:
-        fp = safe_path(path, cwd)
-        fp.parent.mkdir(parents=True, exist_ok=True)
-        fp.write_text(content)
-        return f"Wrote {len(content)} bytes to {path}"
-    except Exception as e:
-        return f"Error: {e}"
 
 
 # ── MessageBus ──

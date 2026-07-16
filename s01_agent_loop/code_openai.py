@@ -14,9 +14,8 @@ Usage:
     OPENAI_API_KEY=... OPENAI_MODEL=gpt-5.5 python s01_agent_loop/code_openai.py
 """
 
-import json
 import os
-import subprocess
+from pathlib import Path
 
 try:
     import readline
@@ -27,6 +26,10 @@ try:
     readline.parse_and_bind("set convert-meta off")
 except ImportError:
     pass
+
+# ── Shared utilities (common/) ──────────────────────────
+from common.utils import as_input_item, call_args, extract_text, function_calls, parse_arguments
+from common.tools import configure as tools_configure, run_bash, run_edit, run_glob, run_read, run_write, safe_path
 
 from dotenv import load_dotenv
 from openai import OpenAI
@@ -40,7 +43,10 @@ if os.getenv("OPENAI_BASE_URL"):
 client = OpenAI(**client_kwargs)
 MODEL = os.getenv("OPENAI_MODEL", "gpt-5.5")
 
-SYSTEM = f"You are a coding agent at {os.getcwd()}. Use bash to solve tasks. Act, don't explain."
+WORKDIR = Path.cwd()
+tools_configure(WORKDIR)
+
+SYSTEM = f"You are a coding agent at {WORKDIR}. Use bash to solve tasks. Act, don't explain."
 
 # -- Tool（工具）定义 -----------------------------------------------------------
 # 告诉 OpenAI："你可以调用这个工具来做事"，就像给模型一本说明书。
@@ -64,63 +70,6 @@ TOOLS = [{
     # strict: 要求模型严格按上面的 schema 生成参数，不能自由发挥
     "strict": True,
 }]
-
-
-# -- Tool execution ----------------------------------------------------------
-def run_bash(command: str) -> str:
-    """执行一条 bash 命令，并把命令输出作为字符串返回。"""
-    # 这里先做一层非常粗的安全拦截，避免模型执行明显危险的系统命令。
-    # 注意：这只是教学 demo 的简化保护，不是真正完整的权限系统。
-    dangerous = ["rm -rf /", "sudo", "shutdown", "reboot", "> /dev/"]
-    if any(d in command for d in dangerous):
-        return "Error: Dangerous command blocked"
-    try:
-        # shell=True: 允许执行完整的 shell 命令，如 "ls -la"
-        # cwd=os.getcwd(): 命令在当前项目目录执行
-        # capture_output=True: 截获命令输出存到 r.stdout/r.stderr，代码才能拿到并处理
-        # text=True: 输出自动解码为普通字符串（不加的话是 bytes，后面拼字符串会报错）
-        # timeout=120: 最多等 120 秒，防止命令卡死
-        r = subprocess.run(
-            command,
-            shell=True, 
-            cwd=os.getcwd(),         
-            capture_output=True, 
-            text=True, 
-            timeout=120
-        )
-        # 合并正常输出和错误输出，一起返回给模型
-        out = (r.stdout + r.stderr).strip()
-        # 输出太长会撑爆上下文，所以最多保留前 50000 个字符。
-        return out[:50000] if out else "(no output)"
-    except subprocess.TimeoutExpired:
-        # 命令超时后，把错误信息作为工具结果返回给模型。
-        return "Error: Timeout (120s)"
-    except (FileNotFoundError, OSError) as e:
-        # 系统层面执行失败时，也把错误信息返回给模型。
-        return f"Error: {e}"
-
-
-def parse_arguments(raw: str) -> dict:
-    """把模型传来的 JSON 参数字符串解析成 Python 字典。"""
-    try:
-        # OpenAI 的工具参数是 JSON 字符串，例如 '{"command": "ls"}'。
-        # json.loads 会把它变成 Python 字典：{"command": "ls"}。
-        return json.loads(raw or "{}")
-    except json.JSONDecodeError as e:
-        # 如果模型传来的 JSON 格式坏了，不让程序崩溃，而是把错误包装成字典返回。
-        return {"_error": f"Invalid JSON arguments: {e}"}
-
-
-def as_input_item(item):
-    """把 OpenAI SDK 的响应对象转换成下一轮请求可接收的普通 dict。"""
-    # response.output 里通常是 SDK 对象，不一定能直接放回下一轮 input。
-    # model_dump 会把它转成普通 JSON 风格数据，方便继续对话。
-    if hasattr(item, "model_dump"):
-        # exclude_unset=True ： 不包含 None 值的字段。
-        # mode="json" ： 以 JSON 格式输出。
-        return item.model_dump(exclude_unset=True, mode="json")
-    # 如果 item 已经是普通 dict 或字符串，就原样返回。
-    return item
 
 
 # -- The core pattern: call tools until the model stops ----------------------

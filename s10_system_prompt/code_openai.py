@@ -14,7 +14,7 @@ Changes from s09:
 Memory section loads when .memory/MEMORY.md exists (real state, not keywords).
 """
 
-import os, subprocess, json
+import os, json
 from pathlib import Path
 
 try:
@@ -22,6 +22,10 @@ try:
     readline.parse_and_bind('set bind-tty-special-chars off')
 except ImportError:
     pass
+
+# ── Shared utilities (common/) ──────────────────────────
+from common.utils import call_args, function_calls, parse_arguments
+from common.tools import configure as tools_configure, run_bash, run_read, run_write, safe_path
 
 from openai import OpenAI
 from dotenv import load_dotenv
@@ -32,6 +36,7 @@ if os.getenv("OPENAI_BASE_URL"):
     client_kwargs["base_url"] = os.environ["OPENAI_BASE_URL"]
 
 WORKDIR = Path.cwd()
+tools_configure(WORKDIR)
 MEMORY_DIR = WORKDIR / ".memory"
 MEMORY_INDEX = MEMORY_DIR / "MEMORY.md"
 client = OpenAI(**client_kwargs)
@@ -39,23 +44,7 @@ MODEL = os.getenv("OPENAI_MODEL", "gpt-5.5")
 
 # OpenAI Responses API helpers
 
-def parse_arguments(raw) -> dict:
-    """Parse a native Responses API function-call argument string."""
-    try:
-        parsed = json.loads(raw or "{}") if isinstance(raw, str) else raw
-        return parsed if isinstance(parsed, dict) else {}
-    except json.JSONDecodeError:
-        return {}
 
-
-def function_calls(response):
-    """Return the native function_call output items from a response."""
-    return [item for item in response.output if getattr(item, "type", None) == "function_call"]
-
-
-def call_args(call) -> dict:
-    """Return a function call's parsed arguments."""
-    return parse_arguments(call.arguments)
 
 
 
@@ -117,41 +106,7 @@ def get_system_prompt(context: dict) -> str:
 
 # ── Tools ──
 
-def safe_path(p: str) -> Path:
-    path = (WORKDIR / p).resolve()
-    if not path.is_relative_to(WORKDIR):
-        raise ValueError(f"Path escapes workspace: {p}")
-    return path
 
-
-def run_bash(command: str) -> str:
-    try:
-        r = subprocess.run(command, shell=True, cwd=WORKDIR,
-                           capture_output=True, text=True, timeout=120)
-        out = (r.stdout + r.stderr).strip()
-        return out[:50000] if out else "(no output)"
-    except subprocess.TimeoutExpired:
-        return "Error: Timeout (120s)"
-
-
-def run_read(path: str, limit: int | None = None) -> str:
-    try:
-        lines = safe_path(path).read_text().splitlines()
-        if limit and limit < len(lines):
-            lines = lines[:limit] + [f"... ({len(lines) - limit} more lines)"]
-        return "\n".join(lines)
-    except Exception as e:
-        return f"Error: {e}"
-
-
-def run_write(path: str, content: str) -> str:
-    try:
-        file_path = safe_path(path)
-        file_path.parent.mkdir(parents=True, exist_ok=True)
-        file_path.write_text(content)
-        return f"Wrote {len(content)} bytes to {path}"
-    except Exception as e:
-        return f"Error: {e}"
 
 
 TOOLS = [
