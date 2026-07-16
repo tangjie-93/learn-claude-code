@@ -2,7 +2,7 @@
 
 本周目标：理解长期运行 agent 的核心难点：上下文膨胀、记忆选择和策略注入。
 
-## Day 15：context compact
+## Day 15：`context compact`
 
 ### 学习材料
 
@@ -10,13 +10,13 @@
 
 ### 具体任务
 
-1. 阅读 token 估算逻辑。
-2. 区分 micro compact 和 auto compact。
-3. 找到 compact 前后 messages 的变化。
+1. 阅读 `token` 估算逻辑。
+2. 区分 `micro compact` 和 `auto compact`。
+3. 找到 `compact` 前后 `messages` 的变化。
 
 ### 产出
 
-解释 micro compact 和 auto compact 的区别。
+解释 `micro compact` 和 `auto compact` 的区别。
 
 ## Day 16：compaction 测试
 
@@ -27,14 +27,14 @@
 ### 具体任务
 
 1. 阅读测试场景。
-2. 找出 tool_use/tool_result 成对保留的断言。
+2. 找出 `tool_use/tool_result` 成对保留的断言。
 3. 思考如果配对断裂，会导致什么问题。
 
 ### 产出
 
-说明为什么 tool_use/tool_result 必须成对保留。
+说明为什么 `tool_use/tool_result` 必须成对保留。
 
-## Day 17：memory
+## Day 17：`memory`
 
 ### 学习材料
 
@@ -44,14 +44,14 @@
 ### 具体任务
 
 1. 区分短期上下文和长期记忆。
-2. 找到 memory 的读写位置。
-3. 思考 memory 应该保存事实、偏好还是过程。
+2. 找到 `memory` 的读写位置。
+3. 思考 `memory` 应该保存事实、偏好还是过程。
 
 ### 产出
 
 写出短期记忆、长期记忆、项目记忆的区别。
 
-## Day 18：system prompt
+## Day 18：`system prompt`
 
 ### 学习材料
 
@@ -59,13 +59,13 @@
 
 ### 具体任务
 
-1. 找到 system prompt 构造逻辑。
+1. 找到 `system prompt` 构造逻辑。
 2. 区分固定策略和动态上下文。
 3. 思考哪些规则应该写进 prompt，哪些应该写进代码。
 
 ### 产出
 
-总结 system prompt 中承载了哪些策略。
+总结 `system prompt` 中承载了哪些策略。
 
 ## Day 19：代码演进对比
 

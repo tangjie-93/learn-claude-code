@@ -31,8 +31,22 @@ except ImportError:
     pass
 
 # ── Shared utilities (common/) ──────────────────────────
-from common.utils import as_input_item, call_args, extract_text, function_calls, parse_arguments
-from common.tools import configure as tools_configure, run_bash, run_edit, run_glob, run_read, run_write, safe_path
+from common.utils import (
+    as_input_item,
+    call_args,
+    extract_text,
+    function_calls,
+    parse_arguments,
+)
+from common.tools import (
+    configure as tools_configure,
+    run_bash,
+    run_edit,
+    run_glob,
+    run_read,
+    run_write,
+    safe_path,
+)
 
 from dotenv import load_dotenv
 from openai import OpenAI
@@ -55,7 +69,10 @@ SYSTEM = f"You are a coding agent at {WORKDIR}. Use tools to solve tasks. Act, d
 #  OpenAI function tools: same names and inputs as s02/code.py
 # ═══════════════════════════════════════════════════════════
 
-def function_tool(name: str, description: str, properties: dict[str, Any], required: list[str]) -> dict[str, Any]:
+
+def function_tool(
+    name: str, description: str, properties: dict[str, Any], required: list[str]
+) -> dict[str, Any]:
     """根据名称、说明和参数 Schema，构造 OpenAI Responses API 的函数工具定义。"""
     return {
         "type": "function",
@@ -83,7 +100,10 @@ TOOLS = [
         "Read file contents.",
         {
             "path": {"type": "string"},
-            "limit": {"type": ["integer", "null"], "description": "Maximum number of lines to read, or null."},
+            "limit": {
+                "type": ["integer", "null"],
+                "description": "Maximum number of lines to read, or null.",
+            },
         },
         ["path", "limit"],
     ),
@@ -124,6 +144,7 @@ TOOL_HANDLERS: dict[str, Callable[..., str]] = {
 #  OpenAI Responses API glue
 # ═══════════════════════════════════════════════════════════
 
+
 def call_tool(name: str, args: dict[str, Any]) -> str:
     """按工具名分发参数到处理函数，并将参数或调用错误转为文本结果。"""
     if "_error" in args:
@@ -153,7 +174,8 @@ def agent_loop(messages: list[dict[str, Any]]) -> Any:
         messages.extend(as_input_item(item) for item in response.output)
 
         tool_calls = [
-            item for item in response.output
+            item
+            for item in response.output
             if getattr(item, "type", None) == "function_call"
         ]
         if not tool_calls:
@@ -164,11 +186,13 @@ def agent_loop(messages: list[dict[str, Any]]) -> Any:
             print(f"\033[33m> {call.name}\033[0m")
             output = call_tool(call.name, args)
             print(str(output)[:200])
-            messages.append({
-                "type": "function_call_output",
-                "call_id": call.call_id,
-                "output": output,
-            })
+            messages.append(
+                {
+                    "type": "function_call_output",
+                    "call_id": call.call_id,
+                    "output": output,
+                }
+            )
 
 
 if __name__ == "__main__":

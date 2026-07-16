@@ -1,8 +1,8 @@
 # 运行命令
 
-## Python 依赖
+## `Python` 依赖
 
-安装 Python 依赖：
+安装 `Python` 依赖：
 
 ```powershell
 pip install -r requirements.txt
@@ -64,7 +64,7 @@ npm run extract
 
 ## 环境变量
 
-运行 Python agent 示例通常需要：
+运行 `Python` agent 示例通常需要：
 
 ```text
 ANTHROPIC_API_KEY=...

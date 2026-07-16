@@ -20,6 +20,7 @@ def configure(workdir: Path, current_todos: list[dict] | None = None):
 
 # ── 路径安全 ──────────────────────────────────────────
 
+
 def safe_path(p: str, workdir: Path | None = None) -> Path:
     """解析用户路径到工作区下，越界则抛出异常。"""
     base = workdir if workdir is not None else _workdir
@@ -31,12 +32,19 @@ def safe_path(p: str, workdir: Path | None = None) -> Path:
 
 # ── 工具实现 ──────────────────────────────────────────
 
+
 def run_bash(command: str, cwd: Path | None = None) -> str:
     """通过 subprocess 执行 shell 命令，返回 stdout/stderr 或超时信息。"""
     try:
         r = subprocess.run(
-            command, shell=True, cwd=cwd if cwd is not None else _workdir,
-            capture_output=True, text=True, timeout=120,
+            command,  # 要执行的 shell 命令，如 "ls -la"
+            shell=True,  # 通过 shell 执行，支持管道、重定向等 shell 语法
+            cwd=(
+                cwd if cwd is not None else _workdir
+            ),  # 命令执行的工作目录，默认用全局 workdir
+            capture_output=True,  # 截获 stdout 和 stderr，存到 r.stdout/r.stderr，不直接打印到终端
+            text=True,  # 输出自动解码为字符串（str），不加则是 bytes 类型
+            timeout=120,  # 命令最多跑 120 秒，超时抛 TimeoutExpired 异常
         )
         out = (r.stdout + r.stderr).strip()
         return out[:50000] if out else "(no output)"
@@ -82,6 +90,7 @@ def run_edit(path: str, old_text: str, new_text: str) -> str:
 def run_glob(pattern: str) -> str:
     """查找工作区下匹配 glob 模式的文件。"""
     import glob as g
+
     try:
         results = []
         for match in g.glob(pattern, root_dir=_workdir):
@@ -105,8 +114,8 @@ def run_todo_write(todos: list) -> str:
     lines = ["\n\033[33m## Current Tasks\033[0m"]
     STATUS_ICONS = {
         "pending": " ",
-        "in_progress": "\033[36m▸\033[0m",   # 青色箭头
-        "completed": "\033[32m✓\033[0m",   # 绿色对勾
+        "in_progress": "\033[36m▸\033[0m",  # 青色箭头
+        "completed": "\033[32m✓\033[0m",  # 绿色对勾
     }
     for t in _current_todos:
         icon = STATUS_ICONS[t["status"]]

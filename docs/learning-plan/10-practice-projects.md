@@ -2,7 +2,7 @@
 
 完成 30 天计划后，建议做三个小项目。
 
-## 1. 实现一个 mini coding agent
+## 1. 实现一个 `mini coding agent`
 
 ### 最小功能
 
@@ -12,7 +12,7 @@
 - `run_command`
 - `todo_write`
 - 简单危险命令拦截
-- 简单 agent loop
+- 简单 `agent loop`
 
 ### 目标
 
@@ -25,25 +25,25 @@
 1. 读取一个本地文件。
 2. 修改一个本地文件。
 3. 运行一个测试命令。
-4. 记录并更新 todo。
+4. 记录并更新 `todo`。
 5. 拒绝明显危险的命令。
 
-## 2. 写一个自定义 skill
+## 2. 写一个自定义 `skill`
 
 ### 建议主题
 
-- Vue 组件审查 skill
-- TypeScript 类型检查 skill
-- PR 总结 skill
-- 测试生成 skill
+- Vue 组件审查 `skill`
+- `TypeScript` 类型检查 `skill`
+- `PR` 总结 `skill`
+- 测试生成 `skill`
 
 ### 目标
 
-理解 skill 是如何把领域知识注入 agent 的。
+理解 `skill` 是如何把领域知识注入 agent 的。
 
 ### 验收方式
 
-一个合格 skill 至少应该包含：
+一个合格 `skill` 至少应该包含：
 
 1. 适用场景。
 2. 不适用场景。
@@ -62,7 +62,7 @@
 
 ### 目标
 
-理解课程内容如何从 Markdown / Python 代码流入前端 UI。
+理解课程内容如何从 Markdown / `Python` 代码流入前端 `UI`。
 
 ### 验收方式
 

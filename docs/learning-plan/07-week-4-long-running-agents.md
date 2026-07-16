@@ -18,7 +18,7 @@
 
 总结错误恢复和普通异常处理的区别。
 
-## Day 23：task system
+## Day 23：`task system`
 
 ### 学习材料
 
@@ -34,7 +34,7 @@
 
 画出 TaskManager 状态流转图。
 
-## Day 24：background tasks
+## Day 24：`background tasks`
 
 ### 学习材料
 
@@ -65,7 +65,7 @@
 
 总结后台任务测试点。
 
-## Day 26：cron scheduler
+## Day 26：`cron` `scheduler`
 
 ### 学习材料
 
@@ -75,13 +75,13 @@
 
 1. 理解定时任务表示方式。
 2. 找到调度触发逻辑。
-3. 思考 cron 和 background task 的关系。
+3. 思考 `cron` 和 `background task` 的关系。
 
 ### 产出
 
 说明定时任务如何扩展 agent 行为。
 
-## Day 27：agent teams
+## Day 27：`agent teams`
 
 ### 学习材料
 
@@ -97,7 +97,7 @@
 
 解释 MessageBus 和 TeammateManager 的职责。
 
-## Day 28：team protocols
+## Day 28：team `protocols`
 
 ### 学习材料
 
@@ -130,7 +130,7 @@
 
 ### 产出
 
-记录 autonomous agents、worktree、MCP、comprehensive 的关键点。
+记录 autonomous agents、`worktree`、`MCP`、comprehensive 的关键点。
 
 ## Day 30：总复盘
 
@@ -146,4 +146,4 @@
 
 ### 产出
 
-完成一张完整 agent harness 架构图。
+完成一张完整 `agent harness` 架构图。
