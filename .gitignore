@@ -234,4 +234,4 @@ test_providers.py
 analysis/
 analysis_progress.md
 .npm-cache/*
-.vscode/
+.vscode/*
