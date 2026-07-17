@@ -44,9 +44,11 @@ def run_bash(command: str, cwd: Path | None = None) -> str:
             ),  # 命令执行的工作目录，默认用全局 workdir
             capture_output=True,  # 截获 stdout 和 stderr，存到 r.stdout/r.stderr，不直接打印到终端
             text=True,  # 输出自动解码为字符串（str），不加则是 bytes 类型
+            encoding="utf-8",  # Windows 默认可能是 gbk，显式使用 UTF-8 以兼容仓库文本
+            errors="replace",  # 遇到非 UTF-8 字节时替换，避免后台 reader 线程抛 UnicodeDecodeError
             timeout=120,  # 命令最多跑 120 秒，超时抛 TimeoutExpired 异常
         )
-        out = (r.stdout + r.stderr).strip()
+        out = ((r.stdout or "") + (r.stderr or "")).strip()
         return out[:50000] if out else "(no output)"
     except subprocess.TimeoutExpired:
         return "Error: Timeout (120s)"
@@ -55,7 +57,7 @@ def run_bash(command: str, cwd: Path | None = None) -> str:
 def run_read(path: str, limit: int | None = None, cwd: Path | None = None) -> str:
     """读取文件内容。可限制返回前 N 行。"""
     try:
-        lines = safe_path(path, cwd).read_text().splitlines()
+        lines = safe_path(path, cwd).read_text(encoding="utf-8", errors="replace").splitlines()
         if limit and limit < len(lines):
             lines = lines[:limit] + [f"... ({len(lines) - limit} more lines)"]
         return "\n".join(lines)
@@ -68,7 +70,7 @@ def run_write(path: str, content: str, cwd: Path | None = None) -> str:
     try:
         file_path = safe_path(path, cwd)
         file_path.parent.mkdir(parents=True, exist_ok=True)
-        file_path.write_text(content)
+        file_path.write_text(content, encoding="utf-8")
         return f"Wrote {len(content)} bytes to {path}"
     except Exception as e:
         return f"Error: {e}"
@@ -78,10 +80,10 @@ def run_edit(path: str, old_text: str, new_text: str) -> str:
     """替换文件中首次出现的 old_text 为 new_text。"""
     try:
         file_path = safe_path(path)
-        text = file_path.read_text()
+        text = file_path.read_text(encoding="utf-8", errors="replace")
         if old_text not in text:
             return f"Error: text not found in {path}"
-        file_path.write_text(text.replace(old_text, new_text, 1))
+        file_path.write_text(text.replace(old_text, new_text, 1), encoding="utf-8")
         return f"Edited {path}"
     except Exception as e:
         return f"Error: {e}"

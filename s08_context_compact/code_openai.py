@@ -301,7 +301,7 @@ def spawn_subagent(description: str) -> str:
 # ═══════════════════════════════════════════════════════════
 
 CONTEXT_LIMIT = 50000  # 自动触发 L4 LLM 摘要的 token 阈值
-KEEP_RECENT = 3  # micro compact 保留的最近工具结果数
+KEEP_RECENT = 2  # micro compact 保留的最近工具结果数；读 3 个文件时可观察到压缩
 PERSIST_THRESHOLD = 30000  # 工具输出持久化到磁盘的字符阈值
 
 
@@ -409,14 +409,31 @@ def collect_function_call_outputs(messages):
     return blocks
 
 
+def _tool_output(block: dict) -> str:
+    """读取 function_call_output 的文本，兼容 Responses API 的 output 和旧版 content 字段。"""
+    return str(block.get("output", block.get("content", "")))
+
+
+def _set_tool_output(block: dict, value: str):
+    """写回 function_call_output 的文本，保持原字段形态。"""
+    key = "output" if "output" in block else "content"
+    block[key] = value
+
+
 def micro_compact(messages):
     """L2 压缩(微压缩)：将较早的工具输出替换为占位文本，只保留最近的 KEEP_RECENT 个。"""
     function_call_outputs = collect_function_call_outputs(messages)
     if len(function_call_outputs) <= KEEP_RECENT:
         return messages
+    compacted = 0
     for _, _, block in function_call_outputs[:-KEEP_RECENT]:
-        if len(block.get("content", "")) > 120:
-            block["content"] = "[Earlier tool result compacted. Re-run if needed.]"
+        if len(_tool_output(block)) > 120:
+            _set_tool_output(
+                block, "[Earlier tool result compacted. Re-run if needed.]"
+            )
+            compacted += 1
+    if compacted:
+        print(f"[micro compact] compacted {compacted} earlier tool result(s)")
     return messages
 
 
@@ -434,37 +451,26 @@ def persist_large_output(call_id, output):
 
 def function_call_output_budget(messages, max_bytes=200_000):
     """L3 压缩：当最新消息中工具输出总大小超过限制时，将最大的结果持久化到磁盘。"""
-    # 取最后一条数据
-    last = messages[-1] if messages else None
-    if (
-        not last
-        or last.get("role") != "user"
-        or not isinstance(last.get("content"), list)
-    ):
-        return messages
-    # 过滤出 function_call_output 类型的块，同时保留其在 content 数组中的索引 i
-    blocks = [
-        (i, b)
-        for i, b in enumerate(last["content"])
-        if isinstance(b, dict) and b.get("type") == "function_call_output"
-    ]
+    blocks = [(mi, block) for mi, _, block in collect_function_call_outputs(messages)]
     # 计算所有块的内容总大小（字节）
-    total = sum(len(str(b.get("content", ""))) for _, b in blocks)
+    total = sum(len(_tool_output(b)) for _, b in blocks)
     if total <= max_bytes:
         return messages
     # 按内容大小降序排列，优先持久化最大的结果
-    ranked = sorted(
-        blocks, key=lambda p: len(str(p[1].get("content", ""))), reverse=True
-    )
+    ranked = sorted(blocks, key=lambda p: len(_tool_output(p[1])), reverse=True)
+    persisted = 0
     for _, block in ranked:
         if total <= max_bytes:
             break
-        content = str(block.get("content", ""))
+        content = _tool_output(block)
         if len(content) <= PERSIST_THRESHOLD:
             continue
         tid = block.get("call_id", "unknown")
-        block["content"] = persist_large_output(tid, content)
-        total = sum(len(str(b.get("content", ""))) for _, b in blocks)
+        _set_tool_output(block, persist_large_output(tid, content))
+        persisted += 1
+        total = sum(len(_tool_output(b)) for _, b in blocks)
+    if persisted:
+        print(f"[tool result budget] persisted {persisted} large tool result(s)")
     return messages
 
 
