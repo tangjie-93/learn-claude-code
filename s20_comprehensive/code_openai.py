@@ -12,10 +12,15 @@ teams, protocols, autonomous agents, worktrees, and MCP.
 """
 
 import json, os, subprocess, time, random, threading, re
+import sys
 from pathlib import Path
 from datetime import datetime
 from dataclasses import dataclass, asdict, field
-import yaml
+
+try:
+    import yaml
+except ModuleNotFoundError:
+    yaml = None
 
 try:
     import readline
@@ -25,6 +30,10 @@ except ImportError:
     READLINE_AVAILABLE = False
 
 # ── Shared utilities (common/) ──────────────────────────
+PROJECT_ROOT = Path(__file__).resolve().parent.parent
+if str(PROJECT_ROOT) not in sys.path:
+    sys.path.insert(0, str(PROJECT_ROOT))
+
 from common.utils import as_input_item, call_args, extract_text, function_calls, parse_arguments, _normalize_todos
 from common.tools import configure as tools_configure, run_bash, run_edit, run_glob, run_read, run_todo_write, run_write, safe_path
 
@@ -293,16 +302,46 @@ def keep_worktree(name: str) -> str:
 SKILL_REGISTRY: dict[str, dict] = {}
 
 
+def _parse_simple_frontmatter(raw: str) -> dict:
+    meta = {}
+    lines = raw.splitlines()
+    i = 0
+    while i < len(lines):
+        line = lines[i].strip()
+        if not line or line.startswith("#") or ":" not in line:
+            i += 1
+            continue
+        key, value = line.split(":", 1)
+        key = key.strip()
+        value = value.strip().strip("\"'")
+        if value in ("|", ">"):
+            block_lines = []
+            i += 1
+            while i < len(lines) and (lines[i].startswith(" ") or not lines[i].strip()):
+                block_line = lines[i].strip()
+                if block_line:
+                    block_lines.append(block_line)
+                i += 1
+            meta[key] = " ".join(block_lines)
+            continue
+        meta[key] = value
+        i += 1
+    return meta
+
+
 def _parse_frontmatter(text: str) -> tuple[dict, str]:
     if not text.startswith("---"):
         return {}, text
     parts = text.split("---", 2)
     if len(parts) < 3:
         return {}, text
-    try:
-        meta = yaml.safe_load(parts[1]) or {}
-    except yaml.YAMLError:
-        meta = {}
+    if yaml is None:
+        meta = _parse_simple_frontmatter(parts[1])
+    else:
+        try:
+            meta = yaml.safe_load(parts[1]) or {}
+        except yaml.YAMLError:
+            meta = {}
     return meta, parts[2].strip()
 
 
@@ -317,9 +356,9 @@ def scan_skills():
         if not manifest.exists():
             continue
         raw = manifest.read_text()
-        meta, _ = _parse_frontmatter(raw)
+        meta, body = _parse_frontmatter(raw)
         name = meta.get("name", directory.name)
-        desc = meta.get("description", raw.split("\n")[0].lstrip("#").strip())
+        desc = meta.get("description") or body.split("\n")[0].lstrip("#").strip()
         SKILL_REGISTRY[name] = {
             "name": name,
             "description": desc,
@@ -678,7 +717,7 @@ def spawn_teammate_thread(name: str, role: str, prompt: str) -> str:
                         tools=sub_tools, max_output_tokens=8000)
                 except Exception:
                     break
-                messages.extend(response.output)
+                messages.extend(as_input_item(item) for item in response.output)
                 if not has_function_call(response.output):
                     break
                 results = []
@@ -919,7 +958,7 @@ def spawn_subagent(description: str) -> str:
         response = client.responses.create(
             model=MODEL, instructions=SUB_SYSTEM, input=messages,
             tools=SUB_TOOLS, max_output_tokens=8000)
-        messages.extend(response.output)
+        messages.extend(as_input_item(item) for item in response.output)
         if not has_function_call(response.output):
             break
         results = []
@@ -1890,7 +1929,7 @@ def agent_loop(messages: list, context: dict):
                 state.has_escalated = True
                 print(f"  \033[33m[max_tokens] retry with {max_tokens}\033[0m")
                 continue
-            messages.extend(response.output)
+            messages.extend(as_input_item(item) for item in response.output)
             if state.recovery_count < MAX_RECOVERY_RETRIES:
                 messages.append({"role": "user", "content": CONTINUATION_PROMPT})
                 state.recovery_count += 1
@@ -1899,7 +1938,7 @@ def agent_loop(messages: list, context: dict):
 
         max_tokens = DEFAULT_MAX_TOKENS
         state.has_escalated = False
-        messages.extend(response.output)
+        messages.extend(as_input_item(item) for item in response.output)
         if not has_function_call(response.output):
             trigger_hooks("Stop", messages)
             return

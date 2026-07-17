@@ -33,6 +33,7 @@ Builds on s07 (skill loading). Usage:
 """
 
 import json, os, time
+import sys
 from pathlib import Path
 
 try:
@@ -41,8 +42,10 @@ try:
     readline.parse_and_bind("set bind-tty-special-chars off")
 except ImportError:
     pass
-
 # ── Shared utilities (common/) ──────────────────────────
+PROJECT_ROOT = Path(__file__).resolve().parent.parent
+if str(PROJECT_ROOT) not in sys.path:
+    sys.path.insert(0, str(PROJECT_ROOT))
 from common.utils import (
     as_input_item,
     call_args,
@@ -66,6 +69,9 @@ from openai import OpenAI
 from dotenv import load_dotenv
 
 load_dotenv(override=True)
+client_kwargs = {}
+if os.getenv("OPENAI_BASE_URL"):
+    client_kwargs["base_url"] = os.environ["OPENAI_BASE_URL"]
 
 WORKDIR = Path.cwd()
 SKILLS_DIR = WORKDIR / "skills"
@@ -243,8 +249,8 @@ def spawn_subagent(description: str) -> str:
             tools=SUB_TOOLS,
             max_output_tokens=8000,
         )
-        # 将 LLM 输出追加到消息历史
-        messages.extend(response.output)
+        # 将 LLM 输出追加到消息历史，转成普通 dict 供后续压缩逻辑处理
+        messages.extend(as_input_item(item) for item in response.output)
         if not function_calls(response):
             break  # LLM 没有请求工具调用 → 得出最终结论
         results = []
@@ -390,6 +396,11 @@ def collect_function_call_outputs(messages):
     """收集消息列表中所有的 function_call_output 块，返回 (消息索引, 块索引, 块)。"""
     blocks = []
     for mi, msg in enumerate(messages):
+        if isinstance(msg, dict) and msg.get("type") == "function_call_output":
+            blocks.append((mi, None, msg))
+            continue
+        if not isinstance(msg, dict):
+            continue
         if msg.get("role") != "user" or not isinstance(msg.get("content"), list):
             continue
         for bi, block in enumerate(msg["content"]):
@@ -731,8 +742,8 @@ def agent_loop(messages: list):
                 continue
             raise
 
-        # 将 LLM 输出追加到消息历史
-        messages.extend(response.output)
+        # 将 LLM 输出追加到消息历史，转成普通 dict 供后续压缩逻辑处理
+        messages.extend(as_input_item(item) for item in response.output)
         if not function_calls(response):
             return  # LLM 没有请求工具调用 → 任务完成
 

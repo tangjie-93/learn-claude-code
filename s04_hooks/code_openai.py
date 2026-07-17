@@ -49,6 +49,7 @@ Needs: pip install openai python-dotenv + OPENAI_API_KEY in .env
 """
 
 import os
+import sys
 from pathlib import Path
 
 try:
@@ -62,6 +63,10 @@ except ImportError:
     pass
 
 # ── Shared utilities (common/) ──────────────────────────
+PROJECT_ROOT = Path(__file__).resolve().parent.parent
+if str(PROJECT_ROOT) not in sys.path:
+    sys.path.insert(0, str(PROJECT_ROOT))
+
 from common.utils import as_input_item, call_args, extract_text, function_calls, parse_arguments
 from common.tools import configure as tools_configure, run_bash, run_edit, run_glob, run_read, run_write, safe_path
 

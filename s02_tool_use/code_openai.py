@@ -16,6 +16,7 @@ s02: Tool Use with OpenAI — 在 s01 OpenAI 循环基础上新增 4 个工具�
 """
 
 import os
+import sys
 from collections.abc import Callable
 from pathlib import Path
 from typing import Any
@@ -31,6 +32,10 @@ except ImportError:
     pass
 
 # ── Shared utilities (common/) ──────────────────────────
+PROJECT_ROOT = Path(__file__).resolve().parent.parent
+if str(PROJECT_ROOT) not in sys.path:
+    sys.path.insert(0, str(PROJECT_ROOT))
+
 from common.utils import (
     as_input_item,
     call_args,

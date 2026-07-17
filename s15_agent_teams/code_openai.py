@@ -20,7 +20,8 @@ ASCII flow:
   Teammate: inbox → LLM → bash/read/write/send → loop (max 10 turns)
 """
 
-import os, json, time, random, threading, queue
+import os
+import sys, json, time, random, threading, queue
 from pathlib import Path
 from datetime import datetime
 from dataclasses import dataclass, asdict
@@ -32,6 +33,10 @@ except ImportError:
     pass
 
 # ── Shared utilities (common/) ──────────────────────────
+PROJECT_ROOT = Path(__file__).resolve().parent.parent
+if str(PROJECT_ROOT) not in sys.path:
+    sys.path.insert(0, str(PROJECT_ROOT))
+
 from common.utils import as_input_item, call_args, extract_text, function_calls, parse_arguments, _normalize_todos
 from common.tools import configure as tools_configure, run_bash as _run_bash, run_edit, run_glob, run_read, run_todo_write, run_write, safe_path
 
@@ -663,7 +668,7 @@ def spawn_teammate_thread(name: str, role: str, prompt: str) -> str:
                     tools=sub_tools, max_output_tokens=8000)
             except Exception:
                 break
-            messages.extend(response.output)
+            messages.extend(as_input_item(item) for item in response.output)
             if not function_calls(response):
                 break
             results = []
@@ -849,7 +854,7 @@ def agent_loop(messages: list, context: dict):
                  "text": f"[Error] {type(e).__name__}: {e}"}]})
             return
 
-        messages.extend(response.output)
+        messages.extend(as_input_item(item) for item in response.output)
         if not function_calls(response):
             return response
 

@@ -24,7 +24,8 @@ ASCII flow:
                                               continue      other? -> log + exit
 """
 
-import os, time, random, json
+import os
+import sys, time, random, json
 from pathlib import Path
 
 try:
@@ -34,6 +35,10 @@ except ImportError:
     pass
 
 # ── Shared utilities (common/) ──────────────────────────
+PROJECT_ROOT = Path(__file__).resolve().parent.parent
+if str(PROJECT_ROOT) not in sys.path:
+    sys.path.insert(0, str(PROJECT_ROOT))
+
 from common.utils import as_input_item, call_args, extract_text, function_calls, parse_arguments, _normalize_todos
 from common.tools import configure as tools_configure, run_bash, run_edit, run_glob, run_read, run_todo_write, run_write, safe_path
 
@@ -277,7 +282,7 @@ def agent_loop(messages: list, context: dict):
                       f" {DEFAULT_MAX_TOKENS} -> {ESCALATED_MAX_TOKENS}\033[0m")
                 continue
             # 64K still truncated: save truncated output + continuation prompt
-            messages.extend(response.output)
+            messages.extend(as_input_item(item) for item in response.output)
             if state.recovery_count < MAX_RECOVERY_RETRIES:
                 messages.append({"role": "user", "content": CONTINUATION_PROMPT})
                 state.recovery_count += 1
@@ -288,7 +293,7 @@ def agent_loop(messages: list, context: dict):
             return
 
         # Normal completion: append assistant response
-        messages.extend(response.output)
+        messages.extend(as_input_item(item) for item in response.output)
 
         if not function_calls(response):
             return response

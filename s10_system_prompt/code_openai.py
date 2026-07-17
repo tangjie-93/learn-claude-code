@@ -14,7 +14,8 @@ Changes from s09:
 Memory section loads when .memory/MEMORY.md exists (real state, not keywords).
 """
 
-import os, json
+import os
+import sys, json
 from pathlib import Path
 
 try:
@@ -24,7 +25,11 @@ except ImportError:
     pass
 
 # ── Shared utilities (common/) ──────────────────────────
-from common.utils import call_args, function_calls, parse_arguments
+PROJECT_ROOT = Path(__file__).resolve().parent.parent
+if str(PROJECT_ROOT) not in sys.path:
+    sys.path.insert(0, str(PROJECT_ROOT))
+
+from common.utils import as_input_item, call_args, function_calls, parse_arguments
 from common.tools import configure as tools_configure, run_bash, run_read, run_write, safe_path
 
 from openai import OpenAI
@@ -154,7 +159,7 @@ def agent_loop(messages: list, context: dict):
         response = client.responses.create(
             model=MODEL, instructions=system, input=messages,
             tools=TOOLS, max_output_tokens=8000)
-        messages.extend(response.output)
+        messages.extend(as_input_item(item) for item in response.output)
         if not function_calls(response):
             return response
 
