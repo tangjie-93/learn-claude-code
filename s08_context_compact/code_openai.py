@@ -505,19 +505,26 @@ def compact_history(messages):
 
 def reactive_compact(messages):
     """应急压缩：当 L1-L4 仍不够、API 报 prompt_too_long 时触发，保存旧上下文、只保留尾部。"""
-    transcript = write_transcript(messages)
-    tail_start = max(0, len(messages) - 5)
+    write_transcript(messages)  # 先把完整对话存档到磁盘，防止信息永久丢失
+    tail_start = max(0, len(messages) - 5)  # 只保留最后 5 条消息，其余全部摘要
     if (
         tail_start > 0
         and tail_start < len(messages)
-        and _is_function_call_output_message(messages[tail_start])
-        and _message_has_function_call(messages[tail_start - 1])
+        and _is_function_call_output_message(
+            messages[tail_start]
+        )  # 尾部第一条是 function_call_output
+        and _message_has_function_call(
+            messages[tail_start - 1]
+        )  # 前一条是 function_call
     ):
-        tail_start -= 1
-    summary = summarize_history(messages[:tail_start])
+        tail_start -= 1  # 配对保护：把 function_call 也拉进尾部，避免 output 孤岛
+    summary = summarize_history(messages[:tail_start])  # 把被裁掉的旧消息全文摘要
     return [
-        {"role": "user", "content": f"[Reactive compact]\n\n{summary}"},
-        *messages[tail_start:],
+        {
+            "role": "user",
+            "content": f"[Reactive compact]\n\n{summary}",
+        },  # 摘要作为第一条消息
+        *messages[tail_start:],  # 展开最后 5 条原文，跟在摘要后面
     ]
 
 
