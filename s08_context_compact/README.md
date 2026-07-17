@@ -208,6 +208,7 @@ def agent_loop(messages):
 ```sh
 cd learn-claude-code
 python s08_context_compact/code.py
+python s08_context_compact/code_openai.py
 ```
 
 试试这些 prompt：
