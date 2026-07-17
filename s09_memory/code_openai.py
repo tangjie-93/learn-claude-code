@@ -24,27 +24,51 @@ Builds on s08 (context compact). Usage:
     Needs: pip install openai python-dotenv + OPENAI_API_KEY in .env
 """
 
-import os, json, time, re
+import os
+import sys, json, time, re
 from pathlib import Path
 
 try:
     import readline
-    readline.parse_and_bind('set bind-tty-special-chars off')
+
+    readline.parse_and_bind("set bind-tty-special-chars off")
 except ImportError:
     pass
 
 # ── Shared utilities (common/) ──────────────────────────
-from common.utils import as_input_item, call_args, extract_text, function_calls, parse_arguments
-from common.tools import configure as tools_configure, run_bash, run_edit, run_glob, run_read, run_write, safe_path
+PROJECT_ROOT = Path(__file__).resolve().parent.parent
+if str(PROJECT_ROOT) not in sys.path:
+    sys.path.insert(0, str(PROJECT_ROOT))
+
+from common.utils import (
+    as_input_item,
+    call_args,
+    extract_text,
+    function_calls,
+    parse_arguments,
+)
+from common.tools import (
+    configure as tools_configure,
+    run_bash,
+    run_edit,
+    run_glob,
+    run_read,
+    run_write,
+    safe_path,
+)
 
 from openai import OpenAI
 from dotenv import load_dotenv
 
 load_dotenv(override=True)
+client_kwargs = {}
+if os.getenv("OPENAI_BASE_URL"):
+    client_kwargs["base_url"] = os.environ["OPENAI_BASE_URL"]
 
 WORKDIR = Path.cwd()
 tools_configure(WORKDIR)
-MEMORY_DIR = WORKDIR / ".memory"; MEMORY_DIR.mkdir(exist_ok=True)
+MEMORY_DIR = WORKDIR / ".memory"
+MEMORY_DIR.mkdir(exist_ok=True)
 MEMORY_INDEX = MEMORY_DIR / "MEMORY.md"
 SKILLS_DIR = WORKDIR / "skills"
 TRANSCRIPT_DIR = WORKDIR / ".transcripts"
@@ -55,17 +79,15 @@ MODEL = os.getenv("OPENAI_MODEL", "gpt-5.5")
 # OpenAI Responses API helpers
 
 
-
-
-
-
 # ═══════════════════════════════════════════════════════════
 #  NEW in s09: Memory System
 # ═══════════════════════════════════════════════════════════
 
 MEMORY_TYPES = ["user", "feedback", "project", "reference"]
 
+
 def _parse_frontmatter(text: str) -> tuple[dict, str]:
+    """解析 YAML frontmatter：提取元数据字典和正文内容。"""
     if not text.startswith("---"):
         return {}, text
     parts = text.split("---", 2)
@@ -80,7 +102,7 @@ def _parse_frontmatter(text: str) -> tuple[dict, str]:
 
 
 def write_memory_file(name: str, mem_type: str, description: str, body: str):
-    """Write a single memory file with YAML frontmatter."""
+    """写入单个记忆文件（YAML frontmatter + Markdown 正文），写完后重建索引。"""
     slug = name.lower().replace(" ", "-").replace("/", "-")
     filename = f"{slug}.md"
     filepath = MEMORY_DIR / filename
@@ -92,7 +114,7 @@ def write_memory_file(name: str, mem_type: str, description: str, body: str):
 
 
 def _rebuild_index():
-    """Rebuild MEMORY.md index from all memory files."""
+    """从所有记忆文件重建 MEMORY.md 索引，生成文件名+描述的行列表。"""
     lines = []
     for f in sorted(MEMORY_DIR.glob("*.md")):
         if f.name == "MEMORY.md":
@@ -106,7 +128,7 @@ def _rebuild_index():
 
 
 def read_memory_index() -> str:
-    """Read MEMORY.md index (injected into SYSTEM every turn)."""
+    """读取 MEMORY.md 索引内容，每轮都会注入到 SYSTEM prompt 中。"""
     if not MEMORY_INDEX.exists():
         return ""
     text = MEMORY_INDEX.read_text().strip()
@@ -114,7 +136,7 @@ def read_memory_index() -> str:
 
 
 def read_memory_file(filename: str) -> str | None:
-    """Read a single memory file's full content."""
+    """读取单个记忆文件的完整内容（含 frontmatter）。"""
     path = MEMORY_DIR / filename
     if not path.exists():
         return None
@@ -122,27 +144,27 @@ def read_memory_file(filename: str) -> str | None:
 
 
 def list_memory_files() -> list[dict]:
-    """List all memory files with metadata."""
+    """列出所有记忆文件及其元数据（文件名、名称、描述、类型、正文）。"""
     result = []
     for f in sorted(MEMORY_DIR.glob("*.md")):
         if f.name == "MEMORY.md":
             continue
         raw = f.read_text()
         meta, body = _parse_frontmatter(raw)
-        result.append({
-            "filename": f.name,
-            "name": meta.get("name", f.stem),
-            "description": meta.get("description", ""),
-            "type": meta.get("type", "user"),
-            "body": body,
-        })
+        result.append(
+            {
+                "filename": f.name,
+                "name": meta.get("name", f.stem),
+                "description": meta.get("description", ""),
+                "type": meta.get("type", "user"),
+                "body": body,
+            }
+        )
     return result
 
 
 def select_relevant_memories(messages: list, max_items: int = 5) -> list[str]:
-    """Select relevant memory filenames by matching recent conversation against
-    memory names/descriptions. Uses a simple LLM call (or falls back to keyword
-    matching on name+description)."""
+    """选择与最近对话相关的记忆文件。优先用 LLM 匹配，失败时降级为关键词匹配。"""
     files = list_memory_files()
     if not files:
         return []
@@ -154,7 +176,8 @@ def select_relevant_memories(messages: list, max_items: int = 5) -> list[str]:
             content = msg.get("content", "")
             if isinstance(content, list):
                 content = " ".join(
-                    str(getattr(b, "text", "")) for b in content
+                    str(getattr(b, "text", ""))
+                    for b in content
                     if getattr(b, "type", None) == "text"
                 )
             if isinstance(content, str):
@@ -189,7 +212,7 @@ def select_relevant_memories(messages: list, max_items: int = 5) -> list[str]:
         )
         text = extract_text(response.output).strip()
         # Extract JSON array from response
-        match = re.search(r'\[.*?\]', text, re.DOTALL)
+        match = re.search(r"\[.*?\]", text, re.DOTALL)
         if match:
             indices = json.loads(match.group())
             selected = []
@@ -215,7 +238,7 @@ def select_relevant_memories(messages: list, max_items: int = 5) -> list[str]:
 
 
 def load_memories(messages: list) -> str:
-    """Load relevant memory content for injection into context."""
+    """加载与当前对话相关的记忆内容，包裹在 <relevant_memories> 标签中注入上下文。"""
     selected_files = select_relevant_memories(messages)
     if not selected_files:
         return ""
@@ -230,7 +253,7 @@ def load_memories(messages: list) -> str:
 
 
 def extract_memories(messages: list):
-    """Extract new memories from recent dialogue. Runs after each turn."""
+    """从最近对话中提取新的记忆（偏好、约束、项目事实等），写入记忆文件。每轮结束后触发。"""
     # Collect recent conversation text
     dialogue_parts = []
     for msg in messages[-10:]:
@@ -238,7 +261,8 @@ def extract_memories(messages: list):
         content = msg.get("content", "")
         if isinstance(content, list):
             content = " ".join(
-                str(getattr(b, "text", "")) for b in content
+                str(getattr(b, "text", ""))
+                for b in content
                 if getattr(b, "type", None) == "text"
             )
         if isinstance(content, str) and content.strip():
@@ -250,7 +274,11 @@ def extract_memories(messages: list):
 
     # Check existing memories to avoid duplicates
     existing = list_memory_files()
-    existing_desc = "\n".join(f"- {m['name']}: {m['description']}" for m in existing) if existing else "(none)"
+    existing_desc = (
+        "\n".join(f"- {m['name']}: {m['description']}" for m in existing)
+        if existing
+        else "(none)"
+    )
 
     prompt = (
         "Extract user preferences, constraints, or project facts from this dialogue.\n"
@@ -267,11 +295,13 @@ def extract_memories(messages: list):
 
     try:
         response = client.responses.create(
-            model=MODEL, input=[{"role": "user", "content": prompt}], max_output_tokens=800
+            model=MODEL,
+            input=[{"role": "user", "content": prompt}],
+            max_output_tokens=800,
         )
         text = extract_text(response.output).strip()
         # Extract JSON array from response
-        match = re.search(r'\[.*\]', text, re.DOTALL)
+        match = re.search(r"\[.*\]", text, re.DOTALL)
         if not match:
             return
         items = json.loads(match.group())
@@ -294,8 +324,9 @@ def extract_memories(messages: list):
 
 CONSOLIDATE_THRESHOLD = 10
 
+
 def consolidate_memories():
-    """Merge duplicate/stale memories. Triggered when file count ≥ threshold."""
+    """合并/整理记忆：当记忆文件数 ≥ 阈值时，删重、去过期、合并到 30 条以内。"""
     files = list_memory_files()
     if len(files) < CONSOLIDATE_THRESHOLD:
         return
@@ -317,10 +348,12 @@ def consolidate_memories():
 
     try:
         response = client.responses.create(
-            model=MODEL, input=[{"role": "user", "content": prompt}], max_output_tokens=3000
+            model=MODEL,
+            input=[{"role": "user", "content": prompt}],
+            max_output_tokens=3000,
         )
         text = extract_text(response.output).strip()
-        match = re.search(r'\[.*\]', text, re.DOTALL)
+        match = re.search(r"\[.*\]", text, re.DOTALL)
         if not match:
             return
         items = json.loads(match.group())
@@ -338,13 +371,16 @@ def consolidate_memories():
             if desc and body:
                 write_memory_file(name, mem_type, desc, body)
 
-        print(f"\n\033[33m[Memory: consolidated {len(files)} → {len(items)} memories]\033[0m")
+        print(
+            f"\n\033[33m[Memory: consolidated {len(files)} → {len(items)} memories]\033[0m"
+        )
     except Exception:
         pass
 
 
 # Build SYSTEM with memory index
 def build_system() -> str:
+    """构建 SYSTEM prompt：包含工作目录和记忆索引，提示 LLM 遵循用户偏好。"""
     index = read_memory_index()
     memories_section = f"\n\nMemories available:\n{index}" if index else ""
     return (
@@ -353,6 +389,7 @@ def build_system() -> str:
         "Relevant memories are injected below. Respect user preferences from memory.\n"
         "When the user says 'remember' or expresses a clear preference, extract it as a memory."
     )
+
 
 SUB_SYSTEM = (
     f"You are a coding agent at {WORKDIR}. "
@@ -366,41 +403,82 @@ SUB_SYSTEM = (
 # ═══════════════════════════════════════════════════════════
 
 
-
 # Subagent (simplified from s06-s07)
 SUB_TOOLS = [
-    {"type": "function", "name": "bash", "description": "Run a shell command.",
-     "parameters": {"type": "object", "properties": {"command": {"type": "string"}}, "required": ["command"]}},
-    {"type": "function", "name": "read_file", "description": "Read file contents.",
-     "parameters": {"type": "object", "properties": {"path": {"type": "string"}}, "required": ["path"]}},
-    {"type": "function", "name": "write_file", "description": "Write content to a file.",
-     "parameters": {"type": "object", "properties": {"path": {"type": "string"}, "content": {"type": "string"}}, "required": ["path", "content"]}},
+    {
+        "type": "function",
+        "name": "bash",
+        "description": "Run a shell command.",
+        "parameters": {
+            "type": "object",
+            "properties": {"command": {"type": "string"}},
+            "required": ["command"],
+        },
+    },
+    {
+        "type": "function",
+        "name": "read_file",
+        "description": "Read file contents.",
+        "parameters": {
+            "type": "object",
+            "properties": {"path": {"type": "string"}},
+            "required": ["path"],
+        },
+    },
+    {
+        "type": "function",
+        "name": "write_file",
+        "description": "Write content to a file.",
+        "parameters": {
+            "type": "object",
+            "properties": {"path": {"type": "string"}, "content": {"type": "string"}},
+            "required": ["path", "content"],
+        },
+    },
 ]
 SUB_HANDLERS = {"bash": run_bash, "read_file": run_read, "write_file": run_write}
 
+
 def spawn_subagent(description: str) -> str:
+    """启动子代理：用简化工具集独立完成一个子任务，最多 30 轮后返回结果。"""
     print(f"\n\033[35m[Subagent spawned]\033[0m")
     messages = [{"role": "user", "content": description}]
     for _ in range(30):
-        response = client.responses.create(model=MODEL, instructions=SUB_SYSTEM,
-            input=messages, tools=SUB_TOOLS, max_output_tokens=8000)
-        messages.extend(response.output)
-        if not function_calls(response): break
+        response = client.responses.create(
+            model=MODEL,
+            instructions=SUB_SYSTEM,
+            input=messages,
+            tools=SUB_TOOLS,
+            max_output_tokens=8000,
+        )
+        messages.extend(as_input_item(item) for item in response.output)
+        if not function_calls(response):
+            break
         results = []
         for block in function_calls(response):
             if block.type == "function_call":
                 handler = SUB_HANDLERS.get(block.name)
-                output = handler(**call_args(block)) if handler else f"Unknown: {block.name}"
+                output = (
+                    handler(**call_args(block)) if handler else f"Unknown: {block.name}"
+                )
                 print(f"  \033[90m[sub] {block.name}: {str(output)[:100]}\033[0m")
-                results.append({"type": "function_call_output", "call_id": block.call_id, "output": output})
+                results.append(
+                    {
+                        "type": "function_call_output",
+                        "call_id": block.call_id,
+                        "output": output,
+                    }
+                )
         messages.extend(results)
     result = response.output_text
     if not result:
         for msg in reversed(messages):
             if msg["role"] == "assistant":
                 result = extract_text(msg["content"])
-                if result: break
-        if not result: result = "Subagent stopped after 30 turns without final answer."
+                if result:
+                    break
+        if not result:
+            result = "Subagent stopped after 30 turns without final answer."
     print(f"\033[35m[Subagent done]\033[0m")
     return result
 
@@ -409,14 +487,25 @@ def spawn_subagent(description: str) -> str:
 #  FROM s08 (skeleton): Compaction pipeline
 # ═══════════════════════════════════════════════════════════
 
-CONTEXT_LIMIT = 50000; KEEP_RECENT = 3; PERSIST_THRESHOLD = 30000
+CONTEXT_LIMIT = 50000
+KEEP_RECENT = 3
+PERSIST_THRESHOLD = 30000
 
-def estimate_size(msgs): return len(str(msgs))
+
+def estimate_size(msgs):
+    """估算消息列表的字符数（≈ token 数量）。"""
+    return len(str(msgs))
+
 
 def _block_type(block):
-    return block.get("type") if isinstance(block, dict) else getattr(block, "type", None)
+    """获取 block 的 type 字段（兼容 dict 和对象两种形式）。"""
+    return (
+        block.get("type") if isinstance(block, dict) else getattr(block, "type", None)
+    )
+
 
 def _message_has_function_call(msg):
+    """判断 assistant 消息中是否包含 function_call。"""
     if msg.get("role") != "assistant":
         return False
     content = msg.get("content")
@@ -424,93 +513,157 @@ def _message_has_function_call(msg):
         return False
     return any(_block_type(block) == "function_call" for block in content)
 
+
 def _is_function_call_output_message(msg):
+    """判断 user 消息中是否包含 function_call_output。"""
     if msg.get("role") != "user":
         return False
     content = msg.get("content")
     if not isinstance(content, list):
         return False
-    return any(isinstance(block, dict) and block.get("type") == "function_call_output" for block in content)
+    return any(
+        isinstance(block, dict) and block.get("type") == "function_call_output"
+        for block in content
+    )
+
 
 def snip_compact(msgs, mx=50):
-    if len(msgs) <= mx: return msgs
+    """L1 裁剪压缩：保留首尾，裁掉中间消息，防止 function_call/output 撕裂。"""
+    if len(msgs) <= mx:
+        return msgs
     head_end, tail_start = 3, len(msgs) - (mx - 3)
     if head_end > 0 and _message_has_function_call(msgs[head_end - 1]):
         while head_end < len(msgs) and _is_function_call_output_message(msgs[head_end]):
             head_end += 1
-    if (tail_start > 0 and tail_start < len(msgs)
-            and _is_function_call_output_message(msgs[tail_start])
-            and _message_has_function_call(msgs[tail_start - 1])):
+    if (
+        tail_start > 0
+        and tail_start < len(msgs)
+        and _is_function_call_output_message(msgs[tail_start])
+        and _message_has_function_call(msgs[tail_start - 1])
+    ):
         tail_start -= 1
     if head_end >= tail_start:
         return msgs
-    return msgs[:head_end] + [{"role": "user", "content": f"[snipped {tail_start - head_end} msgs]"}] + msgs[tail_start:]
+    return (
+        msgs[:head_end]
+        + [{"role": "user", "content": f"[snipped {tail_start - head_end} msgs]"}]
+        + msgs[tail_start:]
+    )
+
 
 def collect_function_call_outputs(msgs):
+    """收集所有消息中的 function_call_output 块，返回 (消息索引, 块索引, 块) 列表。"""
     blocks = []
     for mi, msg in enumerate(msgs):
-        if msg.get("role") != "user" or not isinstance(msg.get("content"), list): continue
+        if msg.get("role") != "user" or not isinstance(msg.get("content"), list):
+            continue
         for bi, block in enumerate(msg["content"]):
-            if isinstance(block, dict) and block.get("type") == "function_call_output": blocks.append((mi, bi, block))
+            if isinstance(block, dict) and block.get("type") == "function_call_output":
+                blocks.append((mi, bi, block))
     return blocks
 
+
 def micro_compact(msgs):
+    """L2 微压缩：保留最后 KEEP_RECENT 个工具结果，其余替换为占位文本。"""
     tr = collect_function_call_outputs(msgs)
-    if len(tr) <= KEEP_RECENT: return msgs
+    if len(tr) <= KEEP_RECENT:
+        return msgs
     for _, _, b in tr[:-KEEP_RECENT]:
-        if len(b.get("content", "")) > 120: b["content"] = "[Earlier tool result compacted.]"
+        if len(b.get("content", "")) > 120:
+            b["content"] = "[Earlier tool result compacted.]"
     return msgs
 
+
 def persist_large(tid, out):
-    if len(out) <= PERSIST_THRESHOLD: return out
+    """将超大的工具输出持久化到磁盘文件，返回文件引用文本。"""
+    if len(out) <= PERSIST_THRESHOLD:
+        return out
     TOOL_RESULTS_DIR.mkdir(parents=True, exist_ok=True)
     p = TOOL_RESULTS_DIR / f"{tid}.txt"
-    if not p.exists(): p.write_text(out)
+    if not p.exists():
+        p.write_text(out)
     return f"<persisted-output>\nFull: {p}\nPreview:\n{out[:2000]}\n</persisted-output>"
 
+
 def function_call_output_budget(msgs, mx=200_000):
+    """L3 输出预算控制：最后一条消息中工具输出超限时，将最大的结果持久化到磁盘。"""
     last = msgs[-1] if msgs else None
-    if not last or last.get("role") != "user" or not isinstance(last.get("content"), list): return msgs
-    blocks = [(i, b) for i, b in enumerate(last["content"]) if isinstance(b, dict) and b.get("type") == "function_call_output"]
+    if (
+        not last
+        or last.get("role") != "user"
+        or not isinstance(last.get("content"), list)
+    ):
+        return msgs
+    blocks = [
+        (i, b)
+        for i, b in enumerate(last["content"])
+        if isinstance(b, dict) and b.get("type") == "function_call_output"
+    ]
     total = sum(len(str(b.get("content", ""))) for _, b in blocks)
-    if total <= mx: return msgs
-    for _, block in sorted(blocks, key=lambda p: len(str(p[1].get("content", ""))), reverse=True):
-        if total <= mx: break
+    if total <= mx:
+        return msgs
+    for _, block in sorted(
+        blocks, key=lambda p: len(str(p[1].get("content", ""))), reverse=True
+    ):
+        if total <= mx:
+            break
         c = str(block.get("content", ""))
-        if len(c) <= PERSIST_THRESHOLD: continue
+        if len(c) <= PERSIST_THRESHOLD:
+            continue
         block["content"] = persist_large(block.get("call_id", "?"), c)
         total = sum(len(str(b.get("content", ""))) for _, b in blocks)
     return msgs
+
 
 def write_transcript(msgs):
     TRANSCRIPT_DIR.mkdir(parents=True, exist_ok=True)
     p = TRANSCRIPT_DIR / f"transcript_{int(time.time())}.jsonl"
     with p.open("w") as f:
-        for m in msgs: f.write(json.dumps(m, default=str) + "\n")
+        for m in msgs:
+            f.write(json.dumps(m, default=str) + "\n")
     return p
 
+
 def summarize_history(msgs):
+    """调用 LLM 将对话历史总结为精简摘要，保留目标、决策、文件变更等关键信息。"""
     conv = json.dumps(msgs, default=str)[:80000]
-    r = client.responses.create(model=MODEL, input=[{"role": "user", "content":
-        "Summarize this coding-agent conversation so work can continue.\n"
-        "Preserve: 1. current goal, 2. key findings, 3. files changed, 4. remaining work, 5. user constraints.\n\n" + conv}],
-        max_output_tokens=2000)
+    r = client.responses.create(
+        model=MODEL,
+        input=[
+            {
+                "role": "user",
+                "content": "Summarize this coding-agent conversation so work can continue.\n"
+                "Preserve: 1. current goal, 2. key findings, 3. files changed, 4. remaining work, 5. user constraints.\n\n"
+                + conv,
+            }
+        ],
+        max_output_tokens=2000,
+    )
     return extract_text(r.content).strip()
 
+
 def compact_history(msgs):
-    write_transcript(msgs)
+    """压缩历史：先写入完整 transcript，再返回一条摘要消息作为新的上下文。"""
     summary = summarize_history(msgs)
     return [{"role": "user", "content": f"[Compacted]\n\n{summary}"}]
 
+
 def reactive_compact(msgs):
+    """应急压缩：API 报 prompt_too_long 时触发，存档旧上下文、只保留尾部 5 条。"""
     write_transcript(msgs)
     tail_start = max(0, len(msgs) - 5)
-    if (tail_start > 0 and tail_start < len(msgs)
-            and _is_function_call_output_message(msgs[tail_start])
-            and _message_has_function_call(msgs[tail_start - 1])):
+    if (
+        tail_start > 0
+        and tail_start < len(msgs)
+        and _is_function_call_output_message(msgs[tail_start])
+        and _message_has_function_call(msgs[tail_start - 1])
+    ):
         tail_start -= 1
     summary = summarize_history(msgs[:tail_start])
-    return [{"role": "user", "content": f"[Reactive compact]\n\n{summary}"}, *msgs[tail_start:]]
+    return [
+        {"role": "user", "content": f"[Reactive compact]\n\n{summary}"},
+        *msgs[tail_start:],
+    ]
 
 
 # ═══════════════════════════════════════════════════════════
@@ -518,23 +671,79 @@ def reactive_compact(msgs):
 # ═══════════════════════════════════════════════════════════
 
 TOOLS = [
-    {"type": "function", "name": "bash", "description": "Run a shell command.",
-     "parameters": {"type": "object", "properties": {"command": {"type": "string"}}, "required": ["command"]}},
-    {"type": "function", "name": "read_file", "description": "Read file contents.",
-     "parameters": {"type": "object", "properties": {"path": {"type": "string"}}, "required": ["path"]}},
-    {"type": "function", "name": "write_file", "description": "Write content to a file.",
-     "parameters": {"type": "object", "properties": {"path": {"type": "string"}, "content": {"type": "string"}}, "required": ["path", "content"]}},
-    {"type": "function", "name": "edit_file", "description": "Replace exact text in a file once.",
-     "parameters": {"type": "object", "properties": {"path": {"type": "string"}, "old_text": {"type": "string"}, "new_text": {"type": "string"}}, "required": ["path", "old_text", "new_text"]}},
-    {"type": "function", "name": "glob", "description": "Find files matching a glob pattern.",
-     "parameters": {"type": "object", "properties": {"pattern": {"type": "string"}}, "required": ["pattern"]}},
-    {"type": "function", "name": "task", "description": "Launch a subagent to handle a subtask.",
-     "parameters": {"type": "object", "properties": {"description": {"type": "string"}}, "required": ["description"]}},
+    {
+        "type": "function",
+        "name": "bash",
+        "description": "Run a shell command.",
+        "parameters": {
+            "type": "object",
+            "properties": {"command": {"type": "string"}},
+            "required": ["command"],
+        },
+    },
+    {
+        "type": "function",
+        "name": "read_file",
+        "description": "Read file contents.",
+        "parameters": {
+            "type": "object",
+            "properties": {"path": {"type": "string"}},
+            "required": ["path"],
+        },
+    },
+    {
+        "type": "function",
+        "name": "write_file",
+        "description": "Write content to a file.",
+        "parameters": {
+            "type": "object",
+            "properties": {"path": {"type": "string"}, "content": {"type": "string"}},
+            "required": ["path", "content"],
+        },
+    },
+    {
+        "type": "function",
+        "name": "edit_file",
+        "description": "Replace exact text in a file once.",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "path": {"type": "string"},
+                "old_text": {"type": "string"},
+                "new_text": {"type": "string"},
+            },
+            "required": ["path", "old_text", "new_text"],
+        },
+    },
+    {
+        "type": "function",
+        "name": "glob",
+        "description": "Find files matching a glob pattern.",
+        "parameters": {
+            "type": "object",
+            "properties": {"pattern": {"type": "string"}},
+            "required": ["pattern"],
+        },
+    },
+    {
+        "type": "function",
+        "name": "task",
+        "description": "Launch a subagent to handle a subtask.",
+        "parameters": {
+            "type": "object",
+            "properties": {"description": {"type": "string"}},
+            "required": ["description"],
+        },
+    },
 ]
 
 TOOL_HANDLERS = {
-    "bash": run_bash, "read_file": run_read, "write_file": run_write,
-    "edit_file": run_edit, "glob": run_glob, "task": spawn_subagent,
+    "bash": run_bash,
+    "read_file": run_read,
+    "write_file": run_write,
+    "edit_file": run_edit,
+    "glob": run_glob,
+    "task": spawn_subagent,
 }
 
 
@@ -544,20 +753,32 @@ TOOL_HANDLERS = {
 
 MAX_REACTIVE_RETRIES = 1
 
+
 def agent_loop(messages: list):
+    """s09 主循环：注入记忆 → 压缩管线 → 调用 LLM → 执行工具 → 提取新记忆。"""
     reactive_retries = 0
-    # s09: inject relevant memory content into the current user turn
+    # 注入与当前对话相关的记忆内容
     memories_content = load_memories(messages)
-    memory_turn = len(messages) - 1 if messages and isinstance(messages[-1].get("content"), str) else None
-    # s09: build system once per user turn; memory is updated after the loop returns
+    memory_turn = (
+        len(messages) - 1
+        if messages and isinstance(messages[-1].get("content"), str)
+        else None
+    )
+    # 每轮构建一次 system prompt，记忆在循环返回后更新
     system = build_system()
 
     while True:
-        # s09: save pre-compression snapshot for accurate memory extraction
-        pre_compress = [m if isinstance(m, dict) else {"role": m.get("role",""),
-            "content": str(m.get("content",""))} for m in messages]
+        # 保存压缩前的快照，用于准确提取记忆
+        pre_compress = [
+            (
+                m
+                if isinstance(m, dict)
+                else {"role": m.get("role", ""), "content": str(m.get("content", ""))}
+            )
+            for m in messages
+        ]
 
-        # s08: compression pipeline (budget → snip → micro)
+        # 四层压缩管线（L3 → L1 → L2，必要时 L4）
         messages[:] = function_call_output_budget(messages)
         messages[:] = snip_compact(messages)
         messages[:] = micro_compact(messages)
@@ -568,39 +789,61 @@ def agent_loop(messages: list):
 
         try:
             request_messages = messages
-            if memories_content and memory_turn is not None and memory_turn < len(messages):
+            if (
+                memories_content
+                and memory_turn is not None
+                and memory_turn < len(messages)
+            ):
                 request_messages = messages.copy()
                 request_messages[memory_turn] = {
                     **messages[memory_turn],
-                    "content": memories_content + "\n\n" + messages[memory_turn]["content"],
+                    "content": memories_content
+                    + "\n\n"
+                    + messages[memory_turn]["content"],
                 }
             response = client.responses.create(
-                model=MODEL, instructions=system, input=request_messages, tools=TOOLS, max_output_tokens=8000
+                model=MODEL,
+                instructions=system,
+                input=request_messages,
+                tools=TOOLS,
+                max_output_tokens=8000,
             )
             reactive_retries = 0
         except Exception as e:
-            if ("prompt_too_long" in str(e).lower() or "too many tokens" in str(e).lower()) and reactive_retries < MAX_REACTIVE_RETRIES:
+            if (
+                "prompt_too_long" in str(e).lower()
+                or "too many tokens" in str(e).lower()
+            ) and reactive_retries < MAX_REACTIVE_RETRIES:
                 print("[reactive compact]")
                 messages[:] = reactive_compact(messages)
                 reactive_retries += 1
                 continue
             raise
 
-        messages.extend(response.output)
+        messages.extend(as_input_item(item) for item in response.output)
         if not function_calls(response):
-            # s09: extract from pre-compression snapshot for full fidelity
+            # 从压缩前快照提取记忆，保证信息完整性
             extract_memories(pre_compress)
             consolidate_memories()
             return
 
         results = []
         for block in function_calls(response):
-            if block.type != "function_call": continue
+            if block.type != "function_call":
+                continue
             print(f"\033[36m> {block.name}\033[0m")
             handler = TOOL_HANDLERS.get(block.name)
-            output = handler(**call_args(block)) if handler else f"Unknown: {block.name}"
+            output = (
+                handler(**call_args(block)) if handler else f"Unknown: {block.name}"
+            )
             print(str(output)[:200])
-            results.append({"type": "function_call_output", "call_id": block.call_id, "output": output})
+            results.append(
+                {
+                    "type": "function_call_output",
+                    "call_id": block.call_id,
+                    "output": output,
+                }
+            )
         messages.extend(results)
 
 
@@ -609,11 +852,15 @@ if __name__ == "__main__":
     print("输入问题，回车发送。输入 q 退出。OpenAI 版本。\n")
     history = []
     while True:
-        try: query = input("\033[36ms09 >> \033[0m")
-        except (EOFError, KeyboardInterrupt): break
-        if query.strip().lower() in ("q", "exit", ""): break
+        try:
+            query = input("\033[36ms09 >> \033[0m")
+        except (EOFError, KeyboardInterrupt):
+            break
+        if query.strip().lower() in ("q", "exit", ""):
+            break
         history.append({"role": "user", "content": query})
         agent_loop(history)
         for block in history[-1]["content"]:
-            if getattr(block, "type", None) == "text": print(block.text)
+            if getattr(block, "type", None) == "text":
+                print(block.text)
         print()
