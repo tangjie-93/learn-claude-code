@@ -65,11 +65,16 @@ class TodoManager:
             if not text:
                 raise ValueError(f"Item {item_id}: text required")
             if status not in ("pending", "in_progress", "completed"):
+                # 只允许三种状态：
+                #   pending     — 还没开始
+                #   in_progress — 正在做（同时只能有一个）
+                #   completed   — 已完成
                 raise ValueError(f"Item {item_id}: invalid status '{status}'")
             if status == "in_progress":
                 in_progress_count += 1
             validated.append({"id": item_id, "text": text, "status": status})
         if in_progress_count > 1:
+            # 同时只允许一个任务处于 in_progress，防止模型同时"做"多件事
             raise ValueError("Only one task can be in_progress at a time")
         self.items = validated
         return self.render()
@@ -79,6 +84,10 @@ class TodoManager:
             return "No todos."
         lines = []
         for item in self.items:
+            # 三种状态对应的终端图标：
+            #   pending     → [ ]  空白（未开始）
+            #   in_progress → [>]  箭头（正在做）
+            #   completed   → [x]  叉号（已完成）
             marker = {"pending": "[ ]", "in_progress": "[>]", "completed": "[x]"}[item["status"]]
             lines.append(f"{marker} #{item['id']}: {item['text']}")
         done = sum(1 for t in self.items if t["status"] == "completed")
