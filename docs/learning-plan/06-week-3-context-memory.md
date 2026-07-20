@@ -44,12 +44,25 @@
 ### 具体任务
 
 1. 区分短期上下文和长期记忆。
+   + 短期上下文：当前对话中的 `messages` 列表，受 L1-L4 压缩管线管理，会话结束后丢弃。
+   + 长期记忆：`.memory/` 下持久化的文件（YAML frontmatter + Markdown），跨会话存在，按相关性筛选注入当前对话。
 2. 找到 `memory` 的读写位置。
+   + `.memory/`，读写分两层：
+     - 索引层：`MEMORY.md`（每行一条记忆），始终注入 SYSTEM prompt。
+     - 详情层：单个 `.md` 文件，按需通过 `read_memory_file()` 加载全文。
 3. 思考 `memory` 应该保存事实、偏好还是过程。
+   + 保存事实（`project`）、偏好（`user`）、纠偏指导（`feedback`）和外部引用（`reference`），不保存过程/中间状态。
 
 ### 产出
 
-写出短期记忆、长期记忆、项目记忆的区别。
+写出短期记忆、长期记忆以及项目记忆的区别。
++ 短期记忆：当前对话中的 `messages` 列表，受 L1-L4 压缩管线管理，会话结束后丢弃。
++ 长期记忆：`.memory/` 下持久化的文件（`YAML frontmatter + Markdown`），跨会话存在，按相关性筛选注入。分 4 种类型：
+    - `user`：用户偏好（如"喜欢用 tab 缩进"）
+    - `project`：项目事实（如"技术栈 Python 3.12、入口 main.py"）
+    - `feedback`：纠偏指导（如"不要用 pandas，用 polars"）
+    - `reference`：外部引用（如"API 文档地址"）
++ 项目记忆不是独立维度，而是长期记忆中 `type: project` 的子类，专门保存项目级事实。
 
 ## Day 18：`system prompt`
 
