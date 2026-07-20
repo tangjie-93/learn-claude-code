@@ -755,7 +755,7 @@ def spawn_teammate_thread(name: str, role: str, prompt: str) -> str:
         for msg in reversed(messages):
             if msg["role"] == "assistant" and isinstance(msg["content"], list):
                 for b in msg["content"]:
-                    if getattr(b, "type", None) == "text":
+                    if getattr(b, "type", None) == "output_text":
                         summary = b.text
                         break
                 else:
@@ -1997,7 +1997,7 @@ def print_turn_assistants(messages: list, turn_start: int):
         if msg.get("role") != "assistant":
             continue
         for block in msg.get("content", []):
-            if block_type(block) == "text":
+            if block_type(block) == "output_text":
                 terminal_print(block["text"] if isinstance(block, dict) else block.text)
 
 

@@ -729,9 +729,9 @@ def print_latest_assistant_text(messages: list):
         print(content)
         return
     for block in content:
-        if getattr(block, "type", None) == "text":
+        if getattr(block, "type", None) == "output_text":
             print(block.text)
-        elif isinstance(block, dict) and block.get("type") == "text":
+        elif isinstance(block, dict) and block.get("type") == "output_text":
             print(block.get("text", ""))
 
 

@@ -196,6 +196,6 @@ if __name__ == "__main__":
         agent_loop(history, context)
         context = update_context(context, history)
         for block in history[-1]["content"]:
-            if getattr(block, "type", None) == "text":
+            if getattr(block, "type", None) == "output_text":
                 print(block.text)
         print()

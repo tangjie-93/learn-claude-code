@@ -569,7 +569,7 @@ def spawn_teammate_thread(name: str, role: str, prompt: str) -> str:
         for msg in reversed(messages):
             if msg["role"] == "assistant" and isinstance(msg["content"], list):
                 for b in msg["content"]:
-                    if getattr(b, "type", None) == "text":
+                    if getattr(b, "type", None) == "output_text":
                         summary = b.text
                         break
                 else:
@@ -982,9 +982,9 @@ if __name__ == "__main__":
         agent_loop(history, context)
         context = update_context(context, history)
         for block in history[-1]["content"]:
-            if getattr(block, "type", None) == "text":
+            if getattr(block, "type", None) == "output_text":
                 print(block.text)
-            elif isinstance(block, dict) and block.get("type") == "text":
+            elif isinstance(block, dict) and block.get("type") == "output_text":
                 print(block.get("text", ""))
 
         inbox = consume_lead_inbox(route_protocol=True)

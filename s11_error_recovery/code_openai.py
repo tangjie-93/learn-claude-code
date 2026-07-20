@@ -335,6 +335,6 @@ if __name__ == "__main__":
             if msg.get("role") != "assistant":
                 continue
             for block in msg["content"]:
-                if getattr(block, "type", None) == "text":
+                if getattr(block, "type", None) == "output_text":
                     print(block.text)
         print()

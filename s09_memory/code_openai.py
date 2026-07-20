@@ -67,6 +67,8 @@ if os.getenv("OPENAI_BASE_URL"):
 
 WORKDIR = Path.cwd()
 tools_configure(WORKDIR)
+# ── Memory System ──────────────────────────────────
+# 1.创建.memory目录
 MEMORY_DIR = WORKDIR / ".memory"
 MEMORY_DIR.mkdir(exist_ok=True)
 MEMORY_INDEX = MEMORY_DIR / "MEMORY.md"
@@ -94,20 +96,26 @@ def _parse_frontmatter(text: str) -> tuple[dict, str]:
     if len(parts) < 3:
         return {}, text
     meta = {}
+    # splitlines() 按换行符 \n （或 \r\n ）拆分字符串，返回行列表。
     for line in parts[1].strip().splitlines():
         if ":" in line:
             k, v = line.split(":", 1)
-            meta[k.strip()] = v.strip().strip('"').strip("'")
+            # 去掉键值对前后的空格，以及可能的引号
+            k = k.strip().strip('"').strip("'")
+            v = v.strip().strip('"').strip("'")
+            meta[k] = v
     return meta, parts[2].strip()
 
 
 def write_memory_file(name: str, mem_type: str, description: str, body: str):
     """写入单个记忆文件（YAML frontmatter + Markdown 正文），写完后重建索引。"""
+    # 把名称转为安全的文件名
     slug = name.lower().replace(" ", "-").replace("/", "-")
     filename = f"{slug}.md"
     filepath = MEMORY_DIR / filename
     filepath.write_text(
-        f"---\nname: {name}\ndescription: {description}\ntype: {mem_type}\n---\n\n{body}\n"
+        f"---\nname: {name}\ndescription: {description}\ntype: {mem_type}\n---\n\n{body}\n",
+        encoding="utf-8",
     )
     _rebuild_index()
     return filepath
@@ -119,19 +127,19 @@ def _rebuild_index():
     for f in sorted(MEMORY_DIR.glob("*.md")):
         if f.name == "MEMORY.md":
             continue
-        raw = f.read_text()
+        raw = f.read_text(encoding="utf-8")
         meta, body = _parse_frontmatter(raw)
         name = meta.get("name", f.stem)
         desc = meta.get("description", body.split("\n")[0][:80])
-        lines.append(f"- [{name}]({f.name}) — {desc}")
-    MEMORY_INDEX.write_text("\n".join(lines) + "\n" if lines else "")
+        lines.append(f"- [{name}]({f.name}) - {desc}")
+    MEMORY_INDEX.write_text("\n".join(lines) + "\n" if lines else "", encoding="utf-8")
 
 
 def read_memory_index() -> str:
     """读取 MEMORY.md 索引内容，每轮都会注入到 SYSTEM prompt 中。"""
     if not MEMORY_INDEX.exists():
         return ""
-    text = MEMORY_INDEX.read_text().strip()
+    text = MEMORY_INDEX.read_text(encoding="utf-8").strip()
     return text if text else ""
 
 
@@ -140,16 +148,17 @@ def read_memory_file(filename: str) -> str | None:
     path = MEMORY_DIR / filename
     if not path.exists():
         return None
-    return path.read_text()
+    return path.read_text(encoding="utf-8")
 
 
 def list_memory_files() -> list[dict]:
     """列出所有记忆文件及其元数据（文件名、名称、描述、类型、正文）。"""
     result = []
+    # 获取memory目录下所有记忆文件，排除 MEMORY.md
     for f in sorted(MEMORY_DIR.glob("*.md")):
         if f.name == "MEMORY.md":
             continue
-        raw = f.read_text()
+        raw = f.read_text(encoding="utf-8")
         meta, body = _parse_frontmatter(raw)
         result.append(
             {
@@ -175,11 +184,7 @@ def select_relevant_memories(messages: list, max_items: int = 5) -> list[str]:
         if msg.get("role") == "user":
             content = msg.get("content", "")
             if isinstance(content, list):
-                content = " ".join(
-                    str(getattr(b, "text", ""))
-                    for b in content
-                    if getattr(b, "type", None) == "text"
-                )
+                content = extract_text(content)
             if isinstance(content, str):
                 recent_texts.append(content)
             if len(recent_texts) >= 3:
@@ -192,7 +197,7 @@ def select_relevant_memories(messages: list, max_items: int = 5) -> list[str]:
     # Build catalog of name + description for LLM to choose from
     catalog_lines = []
     for i, f in enumerate(files):
-        catalog_lines.append(f"{i}: {f['name']} — {f['description']}")
+        catalog_lines.append(f"{i}: {f['name']} - {f['description']}")
     catalog = "\n".join(catalog_lines)
 
     prompt = (
@@ -210,6 +215,7 @@ def select_relevant_memories(messages: list, max_items: int = 5) -> list[str]:
             input=[{"role": "user", "content": prompt}],
             max_output_tokens=200,
         )
+        # 提取 assistant 消息内容（兼容 str 和 list 两种格式）
         text = extract_text(response.output).strip()
         # Extract JSON array from response
         match = re.search(r"\[.*?\]", text, re.DOTALL)
@@ -225,7 +231,8 @@ def select_relevant_memories(messages: list, max_items: int = 5) -> list[str]:
     except Exception:
         pass
 
-    # Fallback: keyword matching on name + description
+    # Fallback: keyword matching on name + description、
+    # 过滤掉长度小于 4 的关键词，避免匹配到无意义的词
     keywords = [w.lower() for w in recent.split() if len(w) > 3]
     selected = []
     for f in files:
@@ -256,15 +263,12 @@ def extract_memories(messages: list):
     """从最近对话中提取新的记忆（偏好、约束、项目事实等），写入记忆文件。每轮结束后触发。"""
     # Collect recent conversation text
     dialogue_parts = []
+    # 取最近 10 条消息，避免过长的对话历史导致 LLM 内存不足
     for msg in messages[-10:]:
         role = msg.get("role", "?")
         content = msg.get("content", "")
         if isinstance(content, list):
-            content = " ".join(
-                str(getattr(b, "text", ""))
-                for b in content
-                if getattr(b, "type", None) == "text"
-            )
+            content = extract_text(content)
         if isinstance(content, str) and content.strip():
             dialogue_parts.append(f"{role}: {content}")
     dialogue = "\n".join(dialogue_parts)
@@ -387,7 +391,8 @@ def build_system() -> str:
         f"You are a coding agent at {WORKDIR}."
         f"{memories_section}\n"
         "Relevant memories are injected below. Respect user preferences from memory.\n"
-        "When the user says 'remember' or expresses a clear preference, extract it as a memory."
+        "When the user says 'remember' or expresses a clear preference, acknowledge it briefly. "
+        "The program will extract it as a memory after the turn."
     )
 
 
@@ -581,7 +586,7 @@ def persist_large(tid, out):
     TOOL_RESULTS_DIR.mkdir(parents=True, exist_ok=True)
     p = TOOL_RESULTS_DIR / f"{tid}.txt"
     if not p.exists():
-        p.write_text(out)
+        p.write_text(out, encoding="utf-8")
     return f"<persisted-output>\nFull: {p}\nPreview:\n{out[:2000]}\n</persisted-output>"
 
 
@@ -616,6 +621,7 @@ def function_call_output_budget(msgs, mx=200_000):
 
 
 def write_transcript(msgs):
+    """将完整对话历史存档到 .transcripts/ 目录（JSONL 格式），用于备份回溯。"""
     TRANSCRIPT_DIR.mkdir(parents=True, exist_ok=True)
     p = TRANSCRIPT_DIR / f"transcript_{int(time.time())}.jsonl"
     with p.open("w") as f:
@@ -639,7 +645,7 @@ def summarize_history(msgs):
         ],
         max_output_tokens=2000,
     )
-    return extract_text(r.content).strip()
+    return extract_text(r).strip()
 
 
 def compact_history(msgs):
@@ -659,6 +665,7 @@ def reactive_compact(msgs):
         and _message_has_function_call(msgs[tail_start - 1])
     ):
         tail_start -= 1
+    # 调用大模型总结对话历史
     summary = summarize_history(msgs[:tail_start])
     return [
         {"role": "user", "content": f"[Reactive compact]\n\n{summary}"},
@@ -757,14 +764,15 @@ MAX_REACTIVE_RETRIES = 1
 def agent_loop(messages: list):
     """s09 主循环：注入记忆 → 压缩管线 → 调用 LLM → 执行工具 → 提取新记忆。"""
     reactive_retries = 0
-    # 注入与当前对话相关的记忆内容
+    # 注入与当前对话相关的记忆内容 只注入到当前这轮的最后一条消息（纯文本的 user message），因为那是 LLM 处理本轮任务时的"入口"。
     memories_content = load_memories(messages)
+    # 记录最近一次注入记忆的轮次，避免重复注入
     memory_turn = (
         len(messages) - 1
         if messages and isinstance(messages[-1].get("content"), str)
         else None
     )
-    # 每轮构建一次 system prompt，记忆在循环返回后更新
+    # 每轮构建一次 system prompt，记忆在循环返回后更新  构建系统提示词
     system = build_system()
 
     while True:
@@ -785,15 +793,22 @@ def agent_loop(messages: list):
 
         if estimate_size(messages) > CONTEXT_LIMIT:
             print("[auto compact]")
+            # L4: 最后一次压缩，确保对话历史在上下文限制内 通过调用大模型来总结摘要
             messages[:] = compact_history(messages)
 
         try:
             request_messages = messages
+            """
+                memories_content：有记忆内容（非空）
+                memory_turn is not None：找到了可注入的消息
+                memory_turn < len(messages)：那条消息还没被 snip 裁掉
+            """
             if (
                 memories_content
                 and memory_turn is not None
                 and memory_turn < len(messages)
             ):
+                # 注入记忆内容到当前这轮的最后一条消息（纯文本的 user message），因为那是 LLM 处理本轮任务时的"入口"。
                 request_messages = messages.copy()
                 request_messages[memory_turn] = {
                     **messages[memory_turn],
@@ -823,9 +838,10 @@ def agent_loop(messages: list):
         messages.extend(as_input_item(item) for item in response.output)
         if not function_calls(response):
             # 从压缩前快照提取记忆，保证信息完整性
+            # 在这里创建记忆文件和更新记忆索引
             extract_memories(pre_compress)
             consolidate_memories()
-            return
+            return extract_text(response.output)
 
         results = []
         for block in function_calls(response):
@@ -859,8 +875,6 @@ if __name__ == "__main__":
         if query.strip().lower() in ("q", "exit", ""):
             break
         history.append({"role": "user", "content": query})
-        agent_loop(history)
-        for block in history[-1]["content"]:
-            if getattr(block, "type", None) == "text":
-                print(block.text)
+        answer = agent_loop(history)
+        print((answer or "").strip())
         print()

@@ -35,12 +35,29 @@ def as_input_item(item):
 
 
 def extract_text(content) -> str:
-    """从 assistant 消息 content 中提取纯文本（兼容 str 和 list 两种格式）。"""
-    if not isinstance(content, list):
-        return str(content)
-    return "\n".join(
-        getattr(b, "text", "") for b in content if getattr(b, "type", None) == "text"
-    )
+    """Extract text from OpenAI Responses SDK objects."""
+    if content is None:
+        return ""
+    if isinstance(content, str):
+        return content
+
+    if getattr(content, "output_text", None):
+        return content.output_text
+
+    if getattr(content, "output", None) is not None:
+        return extract_text(content.output)
+
+    if isinstance(content, list):
+        parts = []
+        for item in content:
+            item_type = getattr(item, "type", None)
+            if item_type in ("output_text", "text"):
+                parts.append(getattr(item, "text", ""))
+            elif item_type == "message":
+                parts.append(extract_text(getattr(item, "content", [])))
+        return "\n".join(parts)
+
+    return ""
 
 
 def _normalize_todos(todos):

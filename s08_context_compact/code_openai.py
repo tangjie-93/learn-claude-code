@@ -503,7 +503,7 @@ def summarize_history(messages):
         "\n".join(
             getattr(block, "text", "")
             for block in response.output
-            if getattr(block, "type", None) == "text"
+            if getattr(block, "type", None) == "output_text"
         ).strip()
         or "(empty summary)"
     )
@@ -818,6 +818,6 @@ if __name__ == "__main__":
         history.append({"role": "user", "content": query})
         agent_loop(history)
         for block in history[-1]["content"]:
-            if getattr(block, "type", None) == "text":
+            if getattr(block, "type", None) == "output_text":
                 print(block.text)
         print()
