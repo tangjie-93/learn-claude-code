@@ -20,7 +20,8 @@ from pathlib import Path
 
 try:
     import readline
-    readline.parse_and_bind('set bind-tty-special-chars off')
+
+    readline.parse_and_bind("set bind-tty-special-chars off")
 except ImportError:
     pass
 
@@ -30,7 +31,13 @@ if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
 from common.utils import as_input_item, call_args, function_calls, parse_arguments
-from common.tools import configure as tools_configure, run_bash, run_read, run_write, safe_path
+from common.tools import (
+    configure as tools_configure,
+    run_bash,
+    run_read,
+    run_write,
+    safe_path,
+)
 
 from openai import OpenAI
 from dotenv import load_dotenv
@@ -50,10 +57,6 @@ MODEL = os.getenv("OPENAI_MODEL", "gpt-5.5")
 # OpenAI Responses API helpers
 
 
-
-
-
-
 # ── Prompt Sections ──
 
 PROMPT_SECTIONS = {
@@ -65,7 +68,7 @@ PROMPT_SECTIONS = {
 
 
 def assemble_system_prompt(context: dict) -> str:
-    """Select and join prompt sections based on current context."""
+    """根据当前上下文选择并拼接 prompt 片段。始终加载 identity/tools/workspace，有记忆时追加 memory。"""
     sections = []
 
     # Always loaded — identity, tools, workspace
@@ -86,15 +89,14 @@ _last_prompt = None
 
 
 def get_system_prompt(context: dict) -> str:
-    """Cache wrapper — reassemble only when context changes.
+    """缓存包装：context 未变时复用上次拼装结果，避免重复字符串拼接。
 
-    Uses json.dumps for deterministic serialization, not Python's hash()
-    which has process randomization and fails on nested dicts/lists.
-    This cache only avoids redundant string assembly within a process.
-    Real Claude Code additionally protects API-level prompt cache via
-    stable section ordering and SYSTEM_PROMPT_DYNAMIC_BOUNDARY.
+    用 json.dumps 做确定性序列化（Python hash() 有进程随机性，且不支持嵌套 dict/list）。
     """
     global _last_context_key, _last_prompt
+    # sort_keys=True   → 按 key 排序输出，保证相同 dict 始终生成相同字符串
+    # ensure_ascii=False → 中文等非 ASCII 字符原样保留，不转义为 \uXXXX
+    # default=str       → 遇到无法序列化的类型（如 Path、set）时调用 str() 兜底
     key = json.dumps(context, sort_keys=True, ensure_ascii=False, default=str)
     if key == _last_context_key and _last_prompt:
         print("  \033[90m[cache hit] system prompt unchanged\033[0m")
@@ -112,23 +114,37 @@ def get_system_prompt(context: dict) -> str:
 # ── Tools ──
 
 
-
-
 TOOLS = [
-    {"type": "function", "name": "bash", "description": "Run a shell command.",
-     "parameters": {"type": "object",
-                      "properties": {"command": {"type": "string"}},
-                      "required": ["command"]}},
-    {"type": "function", "name": "read_file", "description": "Read file contents.",
-     "parameters": {"type": "object",
-                      "properties": {"path": {"type": "string"},
-                                     "limit": {"type": "integer"}},
-                      "required": ["path"]}},
-    {"type": "function", "name": "write_file", "description": "Write content to a file.",
-     "parameters": {"type": "object",
-                      "properties": {"path": {"type": "string"},
-                                     "content": {"type": "string"}},
-                      "required": ["path", "content"]}},
+    {
+        "type": "function",
+        "name": "bash",
+        "description": "Run a shell command.",
+        "parameters": {
+            "type": "object",
+            "properties": {"command": {"type": "string"}},
+            "required": ["command"],
+        },
+    },
+    {
+        "type": "function",
+        "name": "read_file",
+        "description": "Read file contents.",
+        "parameters": {
+            "type": "object",
+            "properties": {"path": {"type": "string"}, "limit": {"type": "integer"}},
+            "required": ["path"],
+        },
+    },
+    {
+        "type": "function",
+        "name": "write_file",
+        "description": "Write content to a file.",
+        "parameters": {
+            "type": "object",
+            "properties": {"path": {"type": "string"}, "content": {"type": "string"}},
+            "required": ["path", "content"],
+        },
+    },
 ]
 
 TOOL_HANDLERS = {"bash": run_bash, "read_file": run_read, "write_file": run_write}
@@ -136,8 +152,9 @@ TOOL_HANDLERS = {"bash": run_bash, "read_file": run_read, "write_file": run_writ
 
 # ── Context ──
 
+
 def update_context(context: dict, messages: list) -> dict:
-    """Derive context from real state: which tools exist, whether memory files exist."""
+    """从真实状态派生上下文：当前启用的工具列表、工作目录、是否加载了记忆文件。"""
     memories = ""
     if MEMORY_INDEX.exists():
         content = MEMORY_INDEX.read_text().strip()
@@ -152,13 +169,18 @@ def update_context(context: dict, messages: list) -> dict:
 
 # ── Agent Loop ──
 
+
 def agent_loop(messages: list, context: dict):
-    """Main loop — uses assembled system prompt instead of hardcoded SYSTEM."""
+    """主循环：用拼装的 system prompt 替代硬编码的 SYSTEM，每次工具调用后重新评估 context。"""
     system = get_system_prompt(context)
     while True:
         response = client.responses.create(
-            model=MODEL, instructions=system, input=messages,
-            tools=TOOLS, max_output_tokens=8000)
+            model=MODEL,
+            instructions=system,
+            input=messages,
+            tools=TOOLS,
+            max_output_tokens=8000,
+        )
         messages.extend(as_input_item(item) for item in response.output)
         if not function_calls(response):
             return response
@@ -169,10 +191,17 @@ def agent_loop(messages: list, context: dict):
                 continue
             print(f"\033[36m> {block.name}\033[0m")
             handler = TOOL_HANDLERS.get(block.name)
-            output = handler(**call_args(block)) if handler else f"Unknown: {block.name}"
+            output = (
+                handler(**call_args(block)) if handler else f"Unknown: {block.name}"
+            )
             print(str(output)[:200])
-            results.append({"type": "function_call_output",
-                            "call_id": block.call_id, "output": output})
+            results.append(
+                {
+                    "type": "function_call_output",
+                    "call_id": block.call_id,
+                    "output": output,
+                }
+            )
         messages.extend(results)
 
         # Re-evaluate context and prompt after each tool round
@@ -194,8 +223,8 @@ if __name__ == "__main__":
             break
         history.append({"role": "user", "content": query})
         agent_loop(history, context)
-        context = update_context(context, history)
         for block in history[-1]["content"]:
-            if getattr(block, "type", None) == "output_text":
-                print(block.text)
+            # model_dump 后 block 是普通 dict，不能用 getattr
+            if isinstance(block, dict) and block.get("type") == "output_text":
+                print(block.get("text", ""))
         print()

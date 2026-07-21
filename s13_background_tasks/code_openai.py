@@ -449,8 +449,7 @@ if __name__ == "__main__":
         agent_loop(history, context)
         context = update_context(context, history)
         for block in history[-1]["content"]:
-            if getattr(block, "type", None) == "output_text":
-                print(block.text)
-            elif isinstance(block, dict) and block.get("type") == "output_text":
+            # model_dump 后 block 是普通 dict，不能用 getattr
+            if isinstance(block, dict) and block.get("type") == "output_text":
                 print(block.get("text", ""))
         print()

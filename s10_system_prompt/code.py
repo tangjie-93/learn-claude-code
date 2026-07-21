@@ -211,7 +211,6 @@ if __name__ == "__main__":
             break
         history.append({"role": "user", "content": query})
         agent_loop(history, context)
-        context = update_context(context, history)
         for block in history[-1]["content"]:
             if getattr(block, "type", None) == "text":
                 print(block.text)

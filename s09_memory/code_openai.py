@@ -497,6 +497,17 @@ KEEP_RECENT = 3
 PERSIST_THRESHOLD = 30000
 
 
+def _tool_output(block: dict) -> str:
+    """读取 function_call_output 的文本，兼容 output（Responses API）和 content 两个字段。"""
+    return str(block.get("output", block.get("content", "")))
+
+
+def _set_tool_output(block: dict, value: str):
+    """写回 function_call_output 的文本，保持原字段形态。"""
+    key = "output" if "output" in block else "content"
+    block[key] = value
+
+
 def estimate_size(msgs):
     """估算消息列表的字符数（≈ token 数量）。"""
     return len(str(msgs))
@@ -574,8 +585,8 @@ def micro_compact(msgs):
     if len(tr) <= KEEP_RECENT:
         return msgs
     for _, _, b in tr[:-KEEP_RECENT]:
-        if len(b.get("content", "")) > 120:
-            b["content"] = "[Earlier tool result compacted.]"
+        if len(_tool_output(b)) > 120:
+            _set_tool_output(b, "[Earlier tool result compacted.]")
     return msgs
 
 
@@ -604,19 +615,17 @@ def function_call_output_budget(msgs, mx=200_000):
         for i, b in enumerate(last["content"])
         if isinstance(b, dict) and b.get("type") == "function_call_output"
     ]
-    total = sum(len(str(b.get("content", ""))) for _, b in blocks)
+    total = sum(len(_tool_output(b)) for _, b in blocks)
     if total <= mx:
         return msgs
-    for _, block in sorted(
-        blocks, key=lambda p: len(str(p[1].get("content", ""))), reverse=True
-    ):
+    for _, block in sorted(blocks, key=lambda p: len(_tool_output(p[1])), reverse=True):
         if total <= mx:
             break
-        c = str(block.get("content", ""))
+        c = _tool_output(block)
         if len(c) <= PERSIST_THRESHOLD:
             continue
-        block["content"] = persist_large(block.get("call_id", "?"), c)
-        total = sum(len(str(b.get("content", ""))) for _, b in blocks)
+        _set_tool_output(block, persist_large(block.get("call_id", "?"), c))
+        total = sum(len(_tool_output(b)) for _, b in blocks)
     return msgs
 
 
