@@ -62,6 +62,7 @@ TASKS_DIR.mkdir(exist_ok=True)
 
 @dataclass
 class Task:
+    """任务数据类：id、标题、描述、状态、负责人、前置依赖。持久化为 .tasks/<id>.json。"""
     id: str
     subject: str
     description: str
@@ -71,11 +72,13 @@ class Task:
 
 
 def _task_path(task_id: str) -> Path:
+    """返回任务 JSON 文件的路径。"""
     return TASKS_DIR / f"{task_id}.json"
 
 
 def create_task(subject: str, description: str = "",
                 blockedBy: list[str] | None = None) -> Task:
+    """创建新任务：生成唯一 id，初始状态 pending，持久化到 .tasks/ 目录。"""
     task = Task(
         id=f"task_{int(time.time())}_{random.randint(0, 9999):04d}",
         subject=subject,
@@ -89,27 +92,29 @@ def create_task(subject: str, description: str = "",
 
 
 def save_task(task: Task):
+    """将任务对象序列化为 JSON，写入 .tasks/<id>.json。"""
     _task_path(task.id).write_text(json.dumps(asdict(task), indent=2))
 
 
 def load_task(task_id: str) -> Task:
+    """从 .tasks/<id>.json 反序列化并重建 Task 对象。"""
     return Task(**json.loads(_task_path(task_id).read_text()))
 
 
 def list_tasks() -> list[Task]:
+    """列出所有任务（按文件名排序）。"""
     return [Task(**json.loads(p.read_text()))
             for p in sorted(TASKS_DIR.glob("task_*.json"))]
 
 
 def get_task(task_id: str) -> str:
-    """Return full task details as JSON."""
+    """获取单个任务的完整 JSON 详情。"""
     task = load_task(task_id)
     return json.dumps(asdict(task), indent=2)
 
 
 def can_start(task_id: str) -> bool:
-    """Check if all blockedBy dependencies are completed.
-    Missing dependencies are treated as blocked."""
+    """检查任务的所有 blockedBy 依赖是否已完成。依赖文件不存在也视为阻塞。"""
     task = load_task(task_id)
     for dep_id in task.blockedBy:
         if not _task_path(dep_id).exists():
@@ -120,6 +125,7 @@ def can_start(task_id: str) -> bool:
 
 
 def claim_task(task_id: str, owner: str = "agent") -> str:
+    """认领任务：检查是否 pending 且依赖已满足，设置 owner 并将状态改为 in_progress。"""
     task = load_task(task_id)
     if task.status != "pending":
         return f"Task {task_id} is {task.status}, cannot claim"
@@ -135,6 +141,7 @@ def claim_task(task_id: str, owner: str = "agent") -> str:
 
 
 def complete_task(task_id: str) -> str:
+    """完成任务：将状态改为 completed，报告哪些下游任务的依赖被解除。"""
     task = load_task(task_id)
     if task.status != "in_progress":
         return f"Task {task_id} is {task.status}, cannot complete"
@@ -162,6 +169,7 @@ PROMPT_SECTIONS = {
 
 
 def assemble_system_prompt(context: dict) -> str:
+    """根据上下文拼接 system prompt，有记忆时追加 memory 片段。"""
     sections = [PROMPT_SECTIONS["identity"],
                 PROMPT_SECTIONS["tools"],
                 PROMPT_SECTIONS["workspace"]]
@@ -175,6 +183,7 @@ _last_context_key, _last_prompt = None, None
 
 
 def get_system_prompt(context: dict) -> str:
+    """缓存包装：context 未变时复用上次拼装结果，用 json.dumps 做确定性序列化。"""
     global _last_context_key, _last_prompt
     key = json.dumps(context, sort_keys=True, ensure_ascii=False, default=str)
     if key == _last_context_key and _last_prompt:
@@ -188,6 +197,7 @@ def get_system_prompt(context: dict) -> str:
 
 def run_create_task(subject: str, description: str = "",
                     blockedBy: list[str] | None = None) -> str:
+    """创建任务 tool wrapper：调用 create_task 并返回友好消息。"""
     task = create_task(subject, description, blockedBy)
     deps = f" (blockedBy: {', '.join(blockedBy)})" if blockedBy else ""
     print(f"  \033[34m[create] {task.subject}{deps}\033[0m")
@@ -195,6 +205,7 @@ def run_create_task(subject: str, description: str = "",
 
 
 def run_list_tasks() -> str:
+    """列出任务 tool wrapper：格式化输出任务列表，含状态图标和依赖信息。"""
     tasks = list_tasks()
     if not tasks:
         return "No tasks. Use create_task to add some."
@@ -210,6 +221,7 @@ def run_list_tasks() -> str:
 
 
 def run_get_task(task_id: str) -> str:
+    """查看任务详情 tool wrapper：返回任务的完整 JSON。"""
     try:
         return get_task(task_id)
     except FileNotFoundError:
@@ -217,10 +229,12 @@ def run_get_task(task_id: str) -> str:
 
 
 def run_claim_task(task_id: str) -> str:
+    """认领任务 tool wrapper：以 agent 身份认领指定任务。"""
     return claim_task(task_id, owner="agent")
 
 
 def run_complete_task(task_id: str) -> str:
+    """完成任务 tool wrapper：调用 complete_task 并报告解除的依赖。"""
     return complete_task(task_id)
 
 
@@ -280,7 +294,7 @@ TOOL_HANDLERS = {
 # ── Context ──
 
 def update_context(context: dict, messages: list) -> dict:
-    """Derive context from real state."""
+    """从真实状态派生上下文：启用的工具列表、工作目录、是否加载了记忆文件。"""
     memories = ""
     if MEMORY_INDEX.exists():
         content = MEMORY_INDEX.read_text().strip()
@@ -296,6 +310,7 @@ def update_context(context: dict, messages: list) -> dict:
 # ── Agent Loop (simplified, focused on task system) ──
 
 def agent_loop(messages: list, context: dict):
+    """主循环：调用 LLM → 处理响应 → 执行工具 → 刷新 context。简化版，不含 s11 的错误恢复。"""
     system = get_system_prompt(context)
     while True:
         try:
