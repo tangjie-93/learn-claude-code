@@ -650,6 +650,7 @@ def summarize_history(msgs):
 
 def compact_history(msgs):
     """压缩历史：先写入完整 transcript，再返回一条摘要消息作为新的上下文。"""
+    write_transcript(msgs)
     summary = summarize_history(msgs)
     return [{"role": "user", "content": f"[Compacted]\n\n{summary}"}]
 
