@@ -127,7 +127,7 @@ Notifications don't reuse the original `tool_use_id`. The original tool call was
 
 ### Loop Integration
 
-In the agent loop, tool execution splits into two paths. Notifications and results merge into a single user message:
+In the agent loop, tool execution splits into two paths:
 
 ```python
 results = []
@@ -145,17 +145,18 @@ for block in response.content:
         results.append({"type": "tool_result",
             "tool_use_id": block.id, "content": output})
 
-# Merge notifications and tool results into one user message
-user_content = []
+# First return tool results using the Responses API convention
+messages.extend(results)
+
+# Background notifications are not tool results; inject them separately
 bg_notifications = collect_background_results()
 if bg_notifications:
-    for notif in bg_notifications:
-        user_content.append({"type": "text", "text": notif})
-user_content.extend(results)
-messages.append({"role": "user", "content": user_content})
+    messages.append({"role": "user", "content": [
+        {"type": "text", "text": notif} for notif in bg_notifications
+    ]})
 ```
 
-Slow operations get a placeholder tool_result with `bg_id`, so the LLM knows this command is still running and can do other things first. When background completes, the notification is injected as an independent text block alongside the current turn's tool_results in one user message.
+Slow operations get a placeholder tool_result with `bg_id`, so the LLM knows this command is still running and can do other things first. When background completes, the notification is injected as a separate `text` block; `tool_result` still follows the Responses API pairing rule.
 
 The teaching version polls background results while the agent loop continues running. Real CC uses a notification queue (`messageQueueManager.ts`) to deliver background completion events to subsequent turns, without waiting for the tool loop.
 
@@ -207,6 +208,7 @@ Try these prompts:
 3. `Create a task to setup the project, then run pip list in the background`
 
 What to observe: Are slow operations dispatched to background? Is a `bg_id` returned? Are background notifications injected in `<task_notification>` format?
+If the command finishes normally, the terminal should show the tool output first and the model's final text afterward. The teaching version prints both `output_text` and `text` content.
 
 ---
 

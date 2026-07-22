@@ -547,17 +547,19 @@ def agent_loop(messages: list, context: dict):
                     }
                 )
 
-        # Inject tool results + background notifications in one user message
-        user_content = list(results)
+        # 先把工具结果按 Responses API 约定作为顶层输入项追加。
+        # 这样模型下一轮能正确把 function_call_output 和原始 function_call 对上。
+        messages.extend(results)
+
+        # 后台通知不是工具结果，不复用 call_id；单独作为一条用户文本消息注入。
         bg_notifications = collect_background_results()
         if bg_notifications:
-            for notif in bg_notifications:
-                user_content.append({"type": "text", "text": notif})
+            user_content = [{"type": "text", "text": notif} for notif in bg_notifications]
+            messages.append({"role": "user", "content": user_content})
             print(
                 f"  \033[32m[inject] {len(bg_notifications)} background "
                 f"notification(s)\033[0m"
             )
-        messages.append({"role": "user", "content": user_content})
         context = update_context(context, messages)
         system = get_system_prompt(context)
 
@@ -575,10 +577,9 @@ if __name__ == "__main__":
         if query.strip().lower() in ("q", "exit", ""):
             break
         history.append({"role": "user", "content": query})
-        agent_loop(history, context)
+        response = agent_loop(history, context)
         context = update_context(context, history)
-        for block in history[-1]["content"]:
-            # model_dump 后 block 是普通 dict，不能用 getattr
-            if isinstance(block, dict) and block.get("type") == "output_text":
-                print(block.get("text", ""))
+        text = extract_text(response) or extract_text(history[-1])
+        if text:
+            print(text)
         print()

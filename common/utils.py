@@ -35,11 +35,20 @@ def as_input_item(item):
 
 
 def extract_text(content) -> str:
-    """Extract text from OpenAI Responses SDK objects."""
+    """从 OpenAI Responses SDK 对象、dict 或 list 中提取可打印文本。"""
     if content is None:
         return ""
     if isinstance(content, str):
         return content
+    if isinstance(content, dict):
+        content_type = content.get("type")
+        if content_type in ("output_text", "text"):
+            return content.get("text", "")
+        if "content" in content:
+            return extract_text(content["content"])
+        if "output" in content:
+            return extract_text(content["output"])
+        return ""
 
     if getattr(content, "output_text", None):
         return content.output_text
@@ -50,11 +59,15 @@ def extract_text(content) -> str:
     if isinstance(content, list):
         parts = []
         for item in content:
-            item_type = getattr(item, "type", None)
+            item_type = item.get("type") if isinstance(item, dict) else getattr(item, "type", None)
             if item_type in ("output_text", "text"):
-                parts.append(getattr(item, "text", ""))
+                parts.append(item.get("text", "") if isinstance(item, dict) else getattr(item, "text", ""))
             elif item_type == "message":
-                parts.append(extract_text(getattr(item, "content", [])))
+                parts.append(
+                    extract_text(item.get("content", []))
+                    if isinstance(item, dict)
+                    else extract_text(getattr(item, "content", []))
+                )
         return "\n".join(parts)
 
     return ""

@@ -127,7 +127,7 @@ def collect_background_results() -> list[str]:
 
 ### ループ統合
 
-agent_loop でツール実行は 2 つのパスに分かれる。通知と結果は 1 つの user メッセージに統合：
+agent_loop でツール実行は 2 つのパスに分かれる。
 
 ```python
 results = []
@@ -145,17 +145,18 @@ for block in response.content:
         results.append({"type": "tool_result",
             "tool_use_id": block.id, "content": output})
 
-# 通知とツール結果を 1 つの user メッセージに統合
-user_content = []
+# まずツール結果を Responses API の約束どおりに返す
+messages.extend(results)
+
+# バックグラウンド通知はツール結果ではないので、別のテキストメッセージとして注入する
 bg_notifications = collect_background_results()
 if bg_notifications:
-    for notif in bg_notifications:
-        user_content.append({"type": "text", "text": notif})
-user_content.extend(results)
-messages.append({"role": "user", "content": user_content})
+    messages.append({"role": "user", "content": [
+        {"type": "text", "text": notif} for notif in bg_notifications
+    ]})
 ```
 
-遅い操作は `bg_id` 付きプレースホルダー tool_result を返し、LLM はコマンドがまだ実行中だと知り、先に他のことをできる。バックグラウンド完了時、通知は独立した text block として現在のターンの tool_result と一緒に 1 つの user メッセージを構成する。
+遅い操作は `bg_id` 付きプレースホルダー tool_result を返し、LLM はコマンドがまだ実行中だと知り、先に他のことをできる。バックグラウンド完了時、通知は独立した `text` block として注入する。`tool_result` は引き続き Responses API のペアリング規則に従う。
 
 教学版は agent loop が継続実行中にバックグラウンド結果をポーリングする。実際の CC は通知キュー（`messageQueueManager.ts`）でバックグラウンド完了イベントを後続ターンに配信、ツールループを待つ必要はない。
 
@@ -207,6 +208,7 @@ python s13_background_tasks/code.py
 3. `Create a task to setup the project, then run pip list in the background`
 
 観察ポイント：遅い操作はバックグラウンドにディスパッチされているか？`bg_id` は返されているか？バックグラウンド通知は `<task_notification>` 形式で注入されているか？
+コマンドが正常終了した場合、端末にはまずツール出力、その後にモデルの最終テキストが表示される。学習版の表示ロジックは `output_text` と `text` の両方に対応している。
 
 ---
 

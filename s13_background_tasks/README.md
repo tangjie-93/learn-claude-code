@@ -127,7 +127,7 @@ def collect_background_results() -> list[str]:
 
 ### 循环中的集成
 
-agent_loop 里，工具执行分两条路，通知和结果合并为一条 user 消息：
+`agent_loop` 里，工具执行分两条路：
 
 ```python
 results = []
@@ -145,17 +145,18 @@ for block in response.content:
         results.append({"type": "tool_result",
             "tool_use_id": block.id, "content": output})
 
-# 通知和工具结果合入同一条 user 消息
-user_content = []
+# 先把工具结果按 Responses API 约定回填
+messages.extend(results)
+
+# 后台通知不是工具结果，单独作为文本消息注入
 bg_notifications = collect_background_results()
 if bg_notifications:
-    for notif in bg_notifications:
-        user_content.append({"type": "text", "text": notif})
-user_content.extend(results)
-messages.append({"role": "user", "content": user_content})
+    messages.append({"role": "user", "content": [
+        {"type": "text", "text": notif} for notif in bg_notifications
+    ]})
 ```
 
-慢操作先回一个带 `bg_id` 的占位 tool_result，LLM 知道这个命令还在跑，可以先做别的事。后台完成后，通知作为独立 text block 和当前轮的 tool_result 一起组成 user 消息。
+慢操作先回一个带 `bg_id` 的占位 tool_result，LLM 知道这个命令还在跑，可以先做别的事。后台完成后，通知作为独立 `text` block 注入；`tool_result` 仍然单独按 `Responses API` 约定回填。
 
 教学版在 agent loop 继续运行时轮询后台结果。真实 CC 通过通知队列（`messageQueueManager.ts`）把后台完成事件送入后续 turn，不需要等工具循环。
 
@@ -207,6 +208,7 @@ python s13_background_tasks/code.py
 3. `Create a task to setup the project, then run pip list in the background`
 
 观察重点：慢操作有没有被送到后台？`bg_id` 是否返回？后台通知有没有以 `<task_notification>` 格式注入？
+如果命令正常结束，终端会先显示工具输出，再显示模型的最终文本；教学版的显示逻辑会同时兼容 `output_text` 和 `text`。
 
 ---
 
