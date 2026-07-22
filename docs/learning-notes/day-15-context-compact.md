@@ -26,10 +26,48 @@ L3 budget → L1 snip → L2 micro → [token > 50000?] → L4 summary → LLM
 | L4 | `compact_history` | LLM 摘要全文 → 替换为一条摘要消息 | 1 | 昂贵 |
 | Emergency | `reactive_compact` | API 仍报 `prompt_too_long` → 存档 + 只保留尾部 5 条 | 1 | 最贵 |
 
-**L2 micro_compact vs L4 compact_history 的区别：**
+**L2 micro_compact vs L4 auto compact（`compact_history`）的区别：**
 
-- `micro_compact`：字符串替换，不调 LLM。把旧的 `function_call_output` 内容替换为 `"[Earlier tool result compacted. Re-run if needed.]"`，保留最近 `KEEP_RECENT`(2) 个。
-- `compact_history`：调 LLM 把整段对话压缩成一段摘要（保留目标、决策、文件变更、剩余工作、用户约束），对话历史被替换为一条 `[Compacted]\n\n{summary}` 消息。
+| | micro_compact (L2) | auto compact / compact_history (L4) |
+|---|---|---|
+| API 调用 | 0 次 | 1 次（调 LLM 生成摘要） |
+| 触发条件 | 无门槛，每轮都执行 | `estimate_size(messages) > 50000` |
+| 处理方式 | 旧工具输出文本替换为占位符 | 整段对话交给 LLM 压缩成一段摘要 |
+| 效果 | 消息数量不变，体积缩小 | 整段对话变成 **1 条** `[Compacted]` 消息 |
+| 代价 | 便宜 | 昂贵（多一次 API 调用） |
+
+**micro_compact 前后（只替换旧工具输出，消息条数不变）：**
+
+压缩前 — 3 个 function_call_output，每个几百行代码：
+```
+[
+  {"role": "user", "content": [
+    {"type": "function_call_output", "output": "import os\nimport sys\n...(500行)..."}]},
+  {"role": "user", "content": [
+    {"type": "function_call_output", "output": "class Foo:\n...(最后2个保留原样)"}]},
+  {"role": "user", "content": [
+    {"type": "function_call_output", "output": "def bar():\n...(最后2个保留原样)"}]},
+]
+```
+压缩后 — 第 1 个输出变占位符：
+```
+[
+  {"role": "user", "content": [
+    {"type": "function_call_output", "output": "[Earlier tool result compacted. Re-run if needed.]"}]},
+  ...（后 2 条不变）
+]
+```
+
+**auto compact 前后（整段对话 → 1 条摘要消息）：**
+
+压缩前：100+ 条 messages，`len(str(msgs)) > 50000`
+
+压缩后：
+```
+[
+  {"role": "user", "content": "[Compacted]\n\n用户正在调试一个 Flask 应用的登录功能，已定位到 bcrypt 版本不兼容的问题..."}
+]
+```
 
 ## 3. 关键代码
 
