@@ -21,6 +21,16 @@
 - `RecoveryState` 跨循环跟踪状态，防止无限重试（escalate 只一次，compact 只一次）
 - jitter 防止惊群效应（thundering herd）
 
+**按来源位置的错误三层分类**：
+
+| 错误类型 | 来源 | 示例 | s11 是否处理 |
+|---|---|---|---|
+| **工具错误** | 工具执行层 | bash 返回非零退出码、read_file 找不到文件、write_file 权限不足 | 未处理 — 工具抛异常会直接崩溃 |
+| **模型错误** | LLM API 层 | 429 限流、529 过载、token 超限、prompt 过长 | 全部覆盖 — with_retry + escalate + compact |
+| **流程错误** | Agent 行为层 | LLM 调用错误的工具、陷入死循环、输出格式不符合预期 | 未处理 — 需要更高层（如 s12 的 TodoWrite）来约束行为 |
+
+s11 的错误恢复专注于**模型错误**（API 层），因为这是最不可预测且系统有能力自愈的层级。工具错误和流程错误属于不同层级的问题，需要在对应层分别处理。
+
 ## 3. 关键代码
 
 > 以下源码来自 [s11_error_recovery/code_openai.py](file:///Users/james/Desktop/learn-claude-code/s11_error_recovery/code_openai.py)
@@ -161,6 +171,28 @@ def agent_loop(messages: list, context: dict):
         ...
 ```
 
+### 3.9 工具错误：未被处理的盲区
+
+```python
+# ── Tool execution ──               # [code_openai.py#L383-401]
+results = []
+for block in function_calls(response):
+    handler = TOOL_HANDLERS.get(block.name)
+    output = (
+        handler(**call_args(block)) if handler else f"Unknown: {block.name}"
+    )
+    results.append({"type": "function_call_output", ...})
+messages.extend(results)
+```
+
+工具执行段没有任何 try/except 包裹。如果 `run_bash` 内部的命令返回非零退出码、`run_read` 遇到权限问题、`run_write` 磁盘满——这些都会直接抛出异常，绕过 agent_loop 的所有错误恢复逻辑，导致程序崩溃。
+
+真实 Claude Code 如何处理工具错误：
+- bash 非零退出码：不作为异常抛出，而是把 stderr + exit code 作为 tool output 返回给 LLM，让 LLM 自己判断是否重试
+- 文件操作错误：同样返回错误消息给 LLM，不中断循环
+
+s11 教学版简化了这一点，聚焦于 API 层的恢复。
+
 ## 4. 我理解的流程
 
 ```mermaid
@@ -195,7 +227,42 @@ flowchart TD
 ## 5. 仍然不清楚的问题
 
 - `with_retry` 的 `fn` 参数为什么用 `lambda` 包一层？直接传 `client.responses.create` 不行吗？——因为需要捕获 `max_tokens` 和 `state.current_model` 的当前值，`lambda` 形成了闭包。
+- 恢复策略全部自动执行，是否合理？
+  - `reactive_compact` 直接丢弃历史消息，LLM 丢失上下文后可能给出不一致的回答——是否应该先询问用户 "对话太长，是否允许压缩？"
+  - 连续 529 自动切备用模型——备用模型的行为/能力可能与主模型不同，用户是否应该知情？
+  - `max_tokens` 的 continuation prompt 让 LLM 接着写，但截断位置可能正好在代码中间——LLM 能否正确续写？
+  - 什么情况下自动恢复应该**放弃**并交给用户决策？当前的设计以恢复次数为唯一上限，没有考虑"恢复代价"（如丢失上下文）
 
 ## 6. 明天要验证的点
 
 - `s12_task_system` 中任务系统的设计，以及 todo 工具的实现
+
+## 7. 总结：错误恢复 vs 普通异常处理
+
+| | 普通异常处理 | 错误恢复 |
+|---|---|---|
+| **目标** | 阻止崩溃，优雅退出 | 系统自愈，继续执行 |
+| **触发条件** | 任何异常 | 仅限可自动修复的错误 |
+| **处理方式** | `try/except` → 记日志 → 退出/返回错误 | 分类 → 干预 → 重试 |
+| **用户感知** | 用户看到错误，需要手动重试 | 用户无感知（429/529/escalate）或最低限度感知（compact 警告） |
+| **关键区别** | "这个错误我处理不了" | "这个错误我能修好" |
+
+**两条核心判断线**：
+
+```
+错误发生
+  │
+  ├── 是瞬态错误（过一会儿可能恢复）？
+  │     └── 是 → 自动重试（指数退避 + 抖动）
+  │           例：429 限流、529 过载
+  │
+  ├── 系统能通过自身操作修复？
+  │     └── 是 → 自动干预 → 重试
+  │           例：max_tokens → 升级上限；prompt_too_long → 压缩上下文
+  │
+  └── 以上都不是？
+        └── 否 → 降级为普通异常处理
+              例：API 认证失败、网络不可达、工具逻辑错误
+```
+
+**s11 的覆盖范围**：当前只覆盖了 API 层（模型错误），工具错误和流程错误属于后续迭代。真实 Claude Code 中还有个隐式的"代理层"——当模型错误恢复失败时，系统会生成一条错误消息注入对话，让 LLM 自己向用户解释发生了什么，这也是一种恢复手段。
