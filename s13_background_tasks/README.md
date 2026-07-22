@@ -131,19 +131,20 @@ def collect_background_results() -> list[str]:
 
 ```python
 results = []
-for block in response.content:
-    if block.type != "tool_use":
+for block in function_calls(response):
+    if block.type != "function_call":
         continue
-    if should_run_background(block.name, block.input):
+    args = call_args(block)
+    if should_run_background(block.name, args):
         bg_id = start_background_task(block)
-        results.append({"type": "tool_result",
-            "tool_use_id": block.id,
-            "content": f"[Background task {bg_id} started] "
-                       f"Result will be available when complete."})
+        results.append({"type": "function_call_output",
+            "call_id": block.call_id,
+            "output": f"[Background task {bg_id} started] "
+                      f"Result will be available when complete."})
     else:
         output = execute_tool(block)
-        results.append({"type": "tool_result",
-            "tool_use_id": block.id, "content": output})
+        results.append({"type": "function_call_output",
+            "call_id": block.call_id, "output": output})
 
 # 先把工具结果按 Responses API 约定回填
 messages.extend(results)
@@ -151,9 +152,7 @@ messages.extend(results)
 # 后台通知不是工具结果，单独作为文本消息注入
 bg_notifications = collect_background_results()
 if bg_notifications:
-    messages.append({"role": "user", "content": [
-        {"type": "text", "text": notif} for notif in bg_notifications
-    ]})
+    messages.append({"role": "user", "content": "\n\n".join(bg_notifications)})
 ```
 
 慢操作先回一个带 `bg_id` 的占位 `function_call_output`，LLM 知道这个命令还在跑，可以先做别的事。后台完成后，通知不会插进同一轮模型请求，而是排队到下一次用户输入前再注入；`function_call_output` 仍然单独按 `Responses API` 约定回填。

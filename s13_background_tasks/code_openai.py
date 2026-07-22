@@ -439,6 +439,7 @@ def start_background_task(block) -> str:
     thread = threading.Thread(target=worker, daemon=True)
     thread.start()
     print(f"  \033[33m[background] dispatched {bg_id}: {cmd[:40]}\033[0m")
+    print("  \033[33m[background] result will be shown before the next prompt\033[0m")
     return bg_id
 
 
@@ -470,6 +471,29 @@ def collect_background_results() -> list[str]:
             f"{task['command'][:40]} ({len(output)} chars)\033[0m"
         )
     return notifications
+
+
+def inject_pending_background_notifications(messages: list):
+    """把已完成后台任务通知注入到下一轮用户输入之前。
+
+    后台任务可能在 agent_loop 返回后才完成，因此不能只在工具循环末尾收集。
+    每次用户输入新问题前都主动收集一次，保证下一轮 LLM 能看到完成通知。
+    """
+    bg_notifications = collect_background_results()
+    if bg_notifications:
+        pending_background_notifications.extend(bg_notifications)
+
+    if not pending_background_notifications:
+        return
+
+    notification_text = "\n\n".join(pending_background_notifications)
+    messages.append({"role": "user", "content": notification_text})
+    print(notification_text[:500])
+    print(
+        f"  \033[32m[inject] {len(pending_background_notifications)} "
+        f"background notification(s)\033[0m"
+    )
+    pending_background_notifications.clear()
 
 
 # ── Context ──
@@ -577,17 +601,7 @@ if __name__ == "__main__":
             break
         if query.strip().lower() in ("q", "exit", ""):
             break
-        if pending_background_notifications:
-            history.append(
-                {
-                    "role": "user",
-                    "content": [
-                        {"type": "text", "text": note}
-                        for note in pending_background_notifications
-                    ],
-                }
-            )
-            pending_background_notifications.clear()
+        inject_pending_background_notifications(history)
         history.append({"role": "user", "content": query})
         response = agent_loop(history, context)
         context = update_context(context, history)

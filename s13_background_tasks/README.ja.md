@@ -131,19 +131,20 @@ agent_loop でツール実行は 2 つのパスに分かれる。
 
 ```python
 results = []
-for block in response.content:
-    if block.type != "tool_use":
+for block in function_calls(response):
+    if block.type != "function_call":
         continue
-    if should_run_background(block.name, block.input):
+    args = call_args(block)
+    if should_run_background(block.name, args):
         bg_id = start_background_task(block)
-        results.append({"type": "tool_result",
-            "tool_use_id": block.id,
-            "content": f"[Background task {bg_id} started] "
-                       f"Result will be available when complete."})
+        results.append({"type": "function_call_output",
+            "call_id": block.call_id,
+            "output": f"[Background task {bg_id} started] "
+                      f"Result will be available when complete."})
     else:
         output = execute_tool(block)
-        results.append({"type": "tool_result",
-            "tool_use_id": block.id, "content": output})
+        results.append({"type": "function_call_output",
+            "call_id": block.call_id, "output": output})
 
 # まずツール結果を Responses API の約束どおりに返す
 messages.extend(results)
@@ -151,9 +152,7 @@ messages.extend(results)
 # バックグラウンド通知はツール結果ではないので、別のテキストメッセージとして注入する
 bg_notifications = collect_background_results()
 if bg_notifications:
-    messages.append({"role": "user", "content": [
-        {"type": "text", "text": notif} for notif in bg_notifications
-    ]})
+    messages.append({"role": "user", "content": "\n\n".join(bg_notifications)})
 ```
 
 遅い操作は `bg_id` 付きプレースホルダー `function_call_output` を返し、LLM はコマンドがまだ実行中だと知り、先に他のことをできる。バックグラウンド完了時、通知は同じモデル要求には入れず、次のユーザー入力の前に注入する。`function_call_output` は引き続き Responses API のペアリング規則に従う。

@@ -131,19 +131,20 @@ In the agent loop, tool execution splits into two paths:
 
 ```python
 results = []
-for block in response.content:
-    if block.type != "tool_use":
+for block in function_calls(response):
+    if block.type != "function_call":
         continue
-    if should_run_background(block.name, block.input):
+    args = call_args(block)
+    if should_run_background(block.name, args):
         bg_id = start_background_task(block)
-        results.append({"type": "tool_result",
-            "tool_use_id": block.id,
-            "content": f"[Background task {bg_id} started] "
-                       f"Result will be available when complete."})
+        results.append({"type": "function_call_output",
+            "call_id": block.call_id,
+            "output": f"[Background task {bg_id} started] "
+                      f"Result will be available when complete."})
     else:
         output = execute_tool(block)
-        results.append({"type": "tool_result",
-            "tool_use_id": block.id, "content": output})
+        results.append({"type": "function_call_output",
+            "call_id": block.call_id, "output": output})
 
 # First return tool results using the Responses API convention
 messages.extend(results)
@@ -151,9 +152,7 @@ messages.extend(results)
 # Background notifications are not tool results; inject them separately
 bg_notifications = collect_background_results()
 if bg_notifications:
-    messages.append({"role": "user", "content": [
-        {"type": "text", "text": notif} for notif in bg_notifications
-    ]})
+    messages.append({"role": "user", "content": "\n\n".join(bg_notifications)})
 ```
 
 Slow operations get a placeholder `function_call_output` with `bg_id`, so the LLM knows this command is still running and can do other things first. When background completes, the notification is not injected into the same model request; it is queued and delivered before the next user turn. `function_call_output` still follows the Responses API pairing rule.
