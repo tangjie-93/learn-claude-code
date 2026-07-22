@@ -156,7 +156,7 @@ if bg_notifications:
     ]})
 ```
 
-遅い操作は `bg_id` 付きプレースホルダー tool_result を返し、LLM はコマンドがまだ実行中だと知り、先に他のことをできる。バックグラウンド完了時、通知は独立した `text` block として注入する。`tool_result` は引き続き Responses API のペアリング規則に従う。
+遅い操作は `bg_id` 付きプレースホルダー `function_call_output` を返し、LLM はコマンドがまだ実行中だと知り、先に他のことをできる。バックグラウンド完了時、通知は同じモデル要求には入れず、次のユーザー入力の前に注入する。`function_call_output` は引き続き Responses API のペアリング規則に従う。
 
 教学版は agent loop が継続実行中にバックグラウンド結果をポーリングする。実際の CC は通知キュー（`messageQueueManager.ts`）でバックグラウンド完了イベントを後続ターンに配信、ツールループを待つ必要はない。
 
@@ -170,7 +170,7 @@ Turn 1:
   → LLM: "OK, I'll check later. Let me also read the config."
 
 Turn 2:
-  LLM → read_file "package.json" (fast, sync)
+  LLM → read_file "web/package.json" (fast, sync)
   → tool_result: file content
   → collect: bg_0001 done! inject <task_notification>
   → LLM sees: config file + install notification in one message
@@ -204,11 +204,11 @@ python s13_background_tasks/code.py
 以下のプロンプトを試してください：
 
 1. `Run pip list in the background and find all Python files in this directory`
-2. `Run npm install (use run_in_background) and while waiting, read package.json`
+2. `Run npm install (use run_in_background) and while waiting, read web/package.json`
 3. `Create a task to setup the project, then run pip list in the background`
 
 観察ポイント：遅い操作はバックグラウンドにディスパッチされているか？`bg_id` は返されているか？バックグラウンド通知は `<task_notification>` 形式で注入されているか？
-コマンドが正常終了した場合、端末にはまずツール出力、その後にモデルの最終テキストが表示される。学習版の表示ロジックは `output_text` と `text` の両方に対応している。
+コマンドが正常終了した場合、端末にはまずツール出力、その後にモデルの最終テキストが表示される。学習版の表示ロジックは `output_text` と `text` の両方に対応している。バックグラウンド通知は次のユーザー入力の前に現れる。
 
 ---
 

@@ -376,6 +376,7 @@ TOOL_HANDLERS = {
 _bg_counter = 0
 background_tasks: dict[str, dict] = {}  # bg_id → {call_id, command, status}
 background_results: dict[str, str] = {}  # bg_id → output
+pending_background_notifications: list[str] = []  # queued for next user turn
 background_lock = threading.Lock()
 
 
@@ -551,13 +552,13 @@ def agent_loop(messages: list, context: dict):
         # 这样模型下一轮能正确把 function_call_output 和原始 function_call 对上。
         messages.extend(results)
 
-        # 后台通知不是工具结果，不复用 call_id；单独作为一条用户文本消息注入。
+        # 后台通知不是工具结果，不复用 call_id。
+        # 这里先缓存，下一轮用户输入前再注入，避免和当前轮 function_call_output 混在同一次模型请求里。
         bg_notifications = collect_background_results()
         if bg_notifications:
-            user_content = [{"type": "text", "text": notif} for notif in bg_notifications]
-            messages.append({"role": "user", "content": user_content})
+            pending_background_notifications.extend(bg_notifications)
             print(
-                f"  \033[32m[inject] {len(bg_notifications)} background "
+                f"  \033[32m[queue] {len(bg_notifications)} background "
                 f"notification(s)\033[0m"
             )
         context = update_context(context, messages)
@@ -576,6 +577,17 @@ if __name__ == "__main__":
             break
         if query.strip().lower() in ("q", "exit", ""):
             break
+        if pending_background_notifications:
+            history.append(
+                {
+                    "role": "user",
+                    "content": [
+                        {"type": "text", "text": note}
+                        for note in pending_background_notifications
+                    ],
+                }
+            )
+            pending_background_notifications.clear()
         history.append({"role": "user", "content": query})
         response = agent_loop(history, context)
         context = update_context(context, history)

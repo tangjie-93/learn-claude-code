@@ -156,7 +156,7 @@ if bg_notifications:
     ]})
 ```
 
-慢操作先回一个带 `bg_id` 的占位 tool_result，LLM 知道这个命令还在跑，可以先做别的事。后台完成后，通知作为独立 `text` block 注入；`tool_result` 仍然单独按 `Responses API` 约定回填。
+慢操作先回一个带 `bg_id` 的占位 `function_call_output`，LLM 知道这个命令还在跑，可以先做别的事。后台完成后，通知不会插进同一轮模型请求，而是排队到下一次用户输入前再注入；`function_call_output` 仍然单独按 `Responses API` 约定回填。
 
 教学版在 agent loop 继续运行时轮询后台结果。真实 CC 通过通知队列（`messageQueueManager.ts`）把后台完成事件送入后续 turn，不需要等工具循环。
 
@@ -170,7 +170,7 @@ Turn 1:
   → LLM: "OK, I'll check later. Let me also read the config."
 
 Turn 2:
-  LLM → read_file "package.json" (fast, sync)
+  LLM → read_file "web/package.json" (fast, sync)
   → tool_result: file content
   → collect: bg_0001 done! inject <task_notification>
   → LLM sees: config file + install notification in one message
@@ -204,11 +204,11 @@ python s13_background_tasks/code.py
 试试这些 prompt：
 
 1. `Run pip list in the background and find all Python files in this directory`
-2. `Run npm install (use run_in_background) and while waiting, read package.json`
+2. `Run npm install (use run_in_background) and while waiting, read web/package.json`
 3. `Create a task to setup the project, then run pip list in the background`
 
 观察重点：慢操作有没有被送到后台？`bg_id` 是否返回？后台通知有没有以 `<task_notification>` 格式注入？
-如果命令正常结束，终端会先显示工具输出，再显示模型的最终文本；教学版的显示逻辑会同时兼容 `output_text` 和 `text`。
+如果命令正常结束，终端会先显示工具输出，再显示模型的最终文本；教学版的显示逻辑会同时兼容 `output_text` 和 `text`。如果后台任务刚完成，通知会在下一次用户输入前注入。
 
 ---
 

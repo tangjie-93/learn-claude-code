@@ -156,7 +156,7 @@ if bg_notifications:
     ]})
 ```
 
-Slow operations get a placeholder tool_result with `bg_id`, so the LLM knows this command is still running and can do other things first. When background completes, the notification is injected as a separate `text` block; `tool_result` still follows the Responses API pairing rule.
+Slow operations get a placeholder `function_call_output` with `bg_id`, so the LLM knows this command is still running and can do other things first. When background completes, the notification is not injected into the same model request; it is queued and delivered before the next user turn. `function_call_output` still follows the Responses API pairing rule.
 
 The teaching version polls background results while the agent loop continues running. Real CC uses a notification queue (`messageQueueManager.ts`) to deliver background completion events to subsequent turns, without waiting for the tool loop.
 
@@ -170,7 +170,7 @@ Turn 1:
   → LLM: "OK, I'll check later. Let me also read the config."
 
 Turn 2:
-  LLM → read_file "package.json" (fast, sync)
+  LLM → read_file "web/package.json" (fast, sync)
   → tool_result: file content
   → collect: bg_0001 done! inject <task_notification>
   → LLM sees: config file + install notification in one message
@@ -204,11 +204,11 @@ python s13_background_tasks/code.py
 Try these prompts:
 
 1. `Run pip list in the background and find all Python files in this directory`
-2. `Run npm install (use run_in_background) and while waiting, read package.json`
+2. `Run npm install (use run_in_background) and while waiting, read web/package.json`
 3. `Create a task to setup the project, then run pip list in the background`
 
 What to observe: Are slow operations dispatched to background? Is a `bg_id` returned? Are background notifications injected in `<task_notification>` format?
-If the command finishes normally, the terminal should show the tool output first and the model's final text afterward. The teaching version prints both `output_text` and `text` content.
+If the command finishes normally, the terminal should show the tool output first and the model's final text afterward. The teaching version prints both `output_text` and `text` content. If a background task just finished, its notification appears before the next user turn.
 
 ---
 
