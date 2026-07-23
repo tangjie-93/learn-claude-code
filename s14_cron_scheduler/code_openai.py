@@ -312,21 +312,6 @@ def should_run_background(tool_name: str, tool_input: dict) -> bool:
     return is_slow_operation(tool_name, tool_input)
 
 
-TOOL_HANDLERS = {
-    "bash": run_bash,
-    "read_file": run_read,
-    "write_file": run_write,
-    "create_task": run_create_task,
-    "list_tasks": run_list_tasks,
-    "get_task": run_get_task,
-    "claim_task": run_claim_task,
-    "complete_task": run_complete_task,
-    "schedule_cron": run_schedule_cron,
-    "list_crons": run_list_crons,
-    "cancel_cron": run_cancel_cron,
-}
-
-
 def execute_tool(block) -> str:
     """执行工具调用并返回输出。"""
     handler = TOOL_HANDLERS.get(block.name)
@@ -652,6 +637,21 @@ def run_cancel_cron(job_id: str) -> str:
     return cancel_job(job_id)
 
 
+TOOL_HANDLERS = {
+    "bash": run_bash,
+    "read_file": run_read,
+    "write_file": run_write,
+    "create_task": run_create_task,
+    "list_tasks": run_list_tasks,
+    "get_task": run_get_task,
+    "claim_task": run_claim_task,
+    "complete_task": run_complete_task,
+    "schedule_cron": run_schedule_cron,
+    "list_crons": run_list_crons,
+    "cancel_cron": run_cancel_cron,
+}
+
+
 # ── Tool Definitions ──
 
 TOOLS = [
@@ -804,6 +804,7 @@ def update_context(context: dict, messages: list) -> dict:
 def agent_loop(messages: list, context: dict) -> dict:
     """主循环：消费 cron 注入 → LLM 调用 → 工具执行（后台/同步） → 后台通知收集 → 返回 context。
     简化版，不含 s11 的错误恢复。cron_scheduler_loop 生产任务，queue_processor_loop 在空闲时唤醒此循环。"""
+    system = get_system_prompt(context)
     while True:
         # Layer 4: consume fired cron jobs → inject as messages
         fired = consume_cron_queue()
@@ -861,13 +862,14 @@ def agent_loop(messages: list, context: dict) -> dict:
                     }
                 )
 
-        # Merge background tool results + notifications into one user message
-        user_content = list(results)
+        # 先把工具结果按 Responses API 约定作为顶层输入项追加。
+        # 这样模型下一轮能正确把 function_call_output 和原始 function_call 对上。
+        messages.extend(results)
+
+        # 后台通知不是工具结果，不复用 call_id；单独作为普通用户文本注入。
         bg_notifications = collect_background_results()
         if bg_notifications:
-            for notif in bg_notifications:
-                user_content.append({"type": "text", "text": notif})
-        messages.append({"role": "user", "content": user_content})
+            messages.append({"role": "user", "content": "\n\n".join(bg_notifications)})
         context = update_context(context, messages)
         system = get_system_prompt(context)
 
@@ -883,15 +885,9 @@ def print_latest_assistant_text(messages: list):
     msg = messages[-1]
     if not isinstance(msg, dict) or msg.get("role") != "assistant":
         return
-    content = msg.get("content", "")
-    if isinstance(content, str):
-        print(content)
-        return
-    for block in content:
-        if getattr(block, "type", None) == "output_text":
-            print(block.text)
-        elif isinstance(block, dict) and block.get("type") == "output_text":
-            print(block.get("text", ""))
+    text = extract_text(msg)
+    if text:
+        print(text)
 
 
 def run_agent_turn_locked(user_query: str | None = None):
