@@ -574,13 +574,15 @@ def agent_loop(messages: list, context: dict):
         # 这样模型下一轮能正确把 function_call_output 和原始 function_call 对上。
         messages.extend(results)
 
-        # 后台通知不是工具结果，不复用 call_id。
-        # 这里先缓存，下一轮用户输入前再注入，避免和当前轮 function_call_output 混在同一次模型请求里。
+        # 已完成的后台任务立即注入当前请求；仍在运行的任务由下一轮用户输入前补发。
         bg_notifications = collect_background_results()
         if bg_notifications:
-            pending_background_notifications.extend(bg_notifications)
+            messages.extend(
+                {"role": "user", "content": notification}
+                for notification in bg_notifications
+            )
             print(
-                f"  \033[32m[queue] {len(bg_notifications)} background "
+                f"  \033[32m[inject] {len(bg_notifications)} background "
                 f"notification(s)\033[0m"
             )
         context = update_context(context, messages)
