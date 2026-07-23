@@ -488,7 +488,6 @@ def inject_pending_background_notifications(messages: list):
 
     notification_text = "\n\n".join(pending_background_notifications)
     messages.append({"role": "user", "content": notification_text})
-    print(notification_text[:500])
     print(
         f"  \033[32m[inject] {len(pending_background_notifications)} "
         f"background notification(s)\033[0m"
@@ -563,7 +562,6 @@ def agent_loop(messages: list, context: dict):
                 )
             else:
                 output = execute_tool(block)
-                print(str(output)[:300])
                 results.append(
                     {
                         "type": "function_call_output",
@@ -605,7 +603,8 @@ if __name__ == "__main__":
         history.append({"role": "user", "content": query})
         response = agent_loop(history, context)
         context = update_context(context, history)
-        text = extract_text(response) or extract_text(history[-1])
+        # Print only the current response to avoid repeating prior history.
+        text = extract_text(response)
         if text:
             print(text)
         print()
