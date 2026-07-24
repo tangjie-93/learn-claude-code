@@ -59,9 +59,17 @@ def extract_text(content) -> str:
     if isinstance(content, list):
         parts = []
         for item in content:
-            item_type = item.get("type") if isinstance(item, dict) else getattr(item, "type", None)
+            item_type = (
+                item.get("type")
+                if isinstance(item, dict)
+                else getattr(item, "type", None)
+            )
             if item_type in ("output_text", "text", "input_text"):
-                parts.append(item.get("text", "") if isinstance(item, dict) else getattr(item, "text", ""))
+                parts.append(
+                    item.get("text", "")
+                    if isinstance(item, dict)
+                    else getattr(item, "text", "")
+                )
             elif item_type == "message":
                 parts.append(
                     extract_text(item.get("content", []))

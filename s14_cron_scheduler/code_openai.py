@@ -16,7 +16,7 @@ Changes from s13:
   - 3 new tools: schedule_cron, list_crons, cancel_cron
 
 Four layers:
-  1. Scheduler: daemon thread checks time → fires matching jobs
+  1. Scheduler: daemon thread checks time → enqueues matching jobs
   2. Queue: cron_queue decouples scheduler from agent loop
   3. Queue processor: wakes the agent when queued work exists and it is idle
   4. Consumer: agent_loop consumes queued jobs and injects them into messages
@@ -382,7 +382,7 @@ DURABLE_PATH = WORKDIR / ".scheduled_tasks.json"
 class CronJob:
     id: str
     cron: str  # "0 9 * * *"
-    prompt: str  # message to inject when fired
+    prompt: str  # message to inject when triggered
     recurring: bool  # True = recurring, False = one-shot
     durable: bool  # True = persist to disk
 
@@ -390,14 +390,25 @@ class CronJob:
 # ── Cron 模块全局状态 ──
 # 所有已注册的 cron 任务（job_id → CronJob），内存中的主数据源
 scheduled_jobs: dict[str, CronJob] = {}
-# 已触发待投递的任务队列：调度线程 push → agent_loop 消费
+# 开启后显示调度、队列、工具调用等内部轨迹
+CRON_DEBUG = os.getenv("CRON_DEBUG", "").lower() in {"1", "true", "yes", "on"}
+# 已匹配待投递的任务队列：调度线程 push → agent_loop 消费
 cron_queue: list[CronJob] = []
-# 保护 scheduled_jobs / cron_queue / _last_fired 的线程锁
+# 保护 scheduled_jobs / cron_queue / _last_queued / _active_cron_ids 的线程锁
 cron_lock = threading.Lock()
-# 保护 agent_loop 互斥执行：用户输入和 cron 触发不能同时跑
+# 保护 agent_loop 互斥执行：用户输入和 cron 调度不能同时跑
 agent_lock = threading.Lock()
-# 防一分钟内重复触发：job_id → 上次触发的 "YYYY-MM-DD HH:MM"
-_last_fired: dict[str, str] = {}
+# 防一分钟内重复入队：job_id → 上次入队的 "YYYY-MM-DD HH:MM"
+_last_queued: dict[str, str] = {}
+# 已入队或正在执行的任务，避免慢任务在下一个周期继续堆积
+_active_cron_ids: set[str] = set()
+
+
+def cron_debug(message: str, color: str = "35") -> None:
+    """仅在 CRON_DEBUG=1 时输出内部调试轨迹。"""
+    if CRON_DEBUG:
+        print(f"  \033[{color}m{message}\033[0m")
+
 
 
 def _cron_field_matches(field: str, value: int) -> bool:
@@ -495,6 +506,23 @@ def validate_cron(cron_expr: str) -> str | None:
     return None
 
 
+def should_enqueue(
+    task_id: str,
+    cron: str,
+    now: datetime,
+    last_queued: dict[str, str],
+) -> bool:
+    """判断任务是否匹配当前时间，并记录本分钟已入队。调用方须持有对应的锁。"""
+    if not cron_matches(cron, now):
+        return False
+
+    minute_marker = now.strftime("%Y-%m-%d %H:%M")
+    if last_queued.get(task_id) == minute_marker:
+        return False  # 本分钟已入队，不重复
+    last_queued[task_id] = minute_marker
+    return True
+
+
 def save_durable_jobs():
     """将 durable 任务持久化到 .scheduled_tasks.json。"""
     durable = [asdict(j) for j in scheduled_jobs.values() if j.durable]
@@ -516,7 +544,7 @@ def load_durable_jobs():
             scheduled_jobs[job.id] = job
         valid = [j for j in jobs if j["id"] in scheduled_jobs]
         if valid:
-            print(f"  \033[35m[cron] loaded {len(valid)} durable job(s)\033[0m")
+            cron_debug(f"[cron] loaded {len(valid)} durable job(s)")
     except Exception:
         pass
 
@@ -539,7 +567,7 @@ def schedule_job(
         scheduled_jobs[job.id] = job
     if durable:
         save_durable_jobs()
-    print(f"  \033[35m[cron register] {job.id} '{cron}' → {prompt[:40]}\033[0m")
+    cron_debug(f"[cron register] {job.id} '{cron}' → {prompt[:40]}")
     return job
 
 
@@ -551,32 +579,30 @@ def cancel_job(job_id: str) -> str:
         return f"Job {job_id} not found"
     if job.durable:
         save_durable_jobs()
-    print(f"  \033[31m[cron cancel] {job_id}\033[0m")
+    cron_debug(f"[cron cancel] {job_id}", "31")
     return f"Cancelled {job_id}"
 
 
 def cron_scheduler_loop():
     """独立 daemon 线程：每 1 秒轮询，匹配当前时间的 cron 任务推入队列。
-    单个任务异常不影响调度线程；one-shot 任务触发后自动删除。"""
+    单个任务异常不影响调度线程；one-shot 任务入队后自动删除。"""
     while True:
         time.sleep(1)
         now = datetime.now()
-        # Date-aware marker prevents daily jobs from skipping on day 2+
-        minute_marker = now.strftime("%Y-%m-%d %H:%M")
         with cron_lock:
             for job in list(scheduled_jobs.values()):
                 try:
-                    # 校验 cron 表达式是否匹配当前时间
-                    if cron_matches(job.cron, now):
-                        # 检查是否已触发过该任务
-                        # 如果未触发过或触发时间与当前时间不同，才触发
-                        if _last_fired.get(job.id) != minute_marker:
-                            cron_queue.append(job)
-                            _last_fired[job.id] = minute_marker
-                            print(
-                                f"  \033[35m[cron fire] {job.id} → "
-                                f"{job.prompt[:40]}\033[0m"
-                            )
+                    if should_enqueue(job.id, job.cron, now, _last_queued):
+                        if job.id in _active_cron_ids:
+                            cron_debug(f"[cron skipped] {job.id} is already active")
+                            continue
+                        # 将匹配的任务推入队列
+                        cron_queue.append(job)
+                        _active_cron_ids.add(job.id)
+                        cron_debug(
+                            f"[cron queued] {job.id} → {job.prompt[:40]}"
+                        )
+                        # 从 scheduled_jobs 中移除已入队的任务
                         if not job.recurring:
                             scheduled_jobs.pop(job.id, None)
                             if job.durable:
@@ -586,15 +612,15 @@ def cron_scheduler_loop():
 
 
 def consume_cron_queue() -> list[CronJob]:
-    """消费 cron_queue 中已触发的任务（由 agent_loop 调用），取出后清空队列。"""
+    """消费 cron_queue 中已入队的任务（由 agent_loop 调用），取出后清空队列。"""
     with cron_lock:
-        fired = list(cron_queue)
+        queued = list(cron_queue)
         cron_queue.clear()
-    return fired
+    return queued
 
 
 def has_cron_queue() -> bool:
-    """检查 cron_queue 中是否有待投递的触发任务。"""
+    """检查 cron_queue 中是否有待投递的任务。"""
     with cron_lock:
         return bool(cron_queue)
 
@@ -602,7 +628,7 @@ def has_cron_queue() -> bool:
 # Load durable jobs on startup, then start scheduler thread
 load_durable_jobs()
 threading.Thread(target=cron_scheduler_loop, daemon=True).start()
-print("  \033[35m[cron] scheduler thread started\033[0m")
+cron_debug("[cron] scheduler thread started")
 
 
 # ── Cron Tools ──
@@ -748,7 +774,7 @@ TOOLS = [
                 "cron": {"type": "string", "description": "5-field cron expression"},
                 "prompt": {
                     "type": "string",
-                    "description": "Message to inject when fired",
+                    "description": "Message to inject when triggered",
                 },
                 "recurring": {
                     "type": "boolean",
@@ -801,16 +827,23 @@ def update_context(context: dict, messages: list) -> dict:
 # queued work exists and no other agent turn is running.
 
 
-def agent_loop(messages: list, context: dict) -> dict:
+def agent_loop(
+    messages: list, context: dict, scheduled_runs: list[CronJob] | None = None
+) -> dict:
     """主循环：消费 cron 注入 → LLM 调用 → 工具执行（后台/同步） → 后台通知收集 → 返回 context。
     简化版，不含 s11 的错误恢复。cron_scheduler_loop 生产任务，queue_processor_loop 在空闲时唤醒此循环。"""
     system = get_system_prompt(context)
+    scheduled_runs = scheduled_runs if scheduled_runs is not None else []
     while True:
-        # Layer 4: consume fired cron jobs → inject as messages
-        fired = consume_cron_queue()
-        for job in fired:
+        # Layer 4: consume queued cron jobs → inject as messages
+        queued = consume_cron_queue()
+        for job in queued:
+            scheduled_runs.append(job)
             messages.append({"role": "user", "content": f"[Scheduled] {job.prompt}"})
-            print(f"  \033[35m[inject cron] {job.prompt[:50]}\033[0m")
+            started_at = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+            print(f"\n\033[35m[scheduled task] {job.id} @ {started_at}\033[0m")
+            print(f"  {job.prompt}")
+            cron_debug(f"[inject cron] {job.prompt[:50]}")
 
         try:
             response = client.responses.create(
@@ -839,7 +872,7 @@ def agent_loop(messages: list, context: dict) -> dict:
         for block in function_calls(response):
             if block.type != "function_call":
                 continue
-            print(f"\033[36m> {block.name}\033[0m")
+            cron_debug(f"> {block.name}", "36")
 
             if should_run_background(block.name, call_args(block)):
                 bg_id = start_background_task(block)
@@ -853,7 +886,7 @@ def agent_loop(messages: list, context: dict) -> dict:
                 )
             else:
                 output = execute_tool(block)
-                print(str(output)[:300])
+                cron_debug(str(output)[:300], "36")
                 results.append(
                     {
                         "type": "function_call_output",
@@ -893,12 +926,20 @@ def print_latest_assistant_text(messages: list):
 def run_agent_turn_locked(user_query: str | None = None):
     """执行一轮 agent 交互。调用者须持有 agent_lock。可传入用户查询或直接消费 cron 队列。"""
     global session_context
+    scheduled_runs: list[CronJob] = []
     if user_query is not None:
         session_history.append({"role": "user", "content": user_query})
-    session_context = agent_loop(session_history, session_context)
-    session_context = update_context(session_context, session_history)
-    print_latest_assistant_text(session_history)
-    print()
+    try:
+        session_context = agent_loop(session_history, session_context, scheduled_runs)
+        session_context = update_context(session_context, session_history)
+        if scheduled_runs:
+            print("\033[35m[scheduled result]\033[0m")
+        print_latest_assistant_text(session_history)
+        print()
+    finally:
+        if scheduled_runs:
+            with cron_lock:
+                _active_cron_ids.difference_update(job.id for job in scheduled_runs)
 
 
 def queue_processor_loop():
@@ -916,7 +957,7 @@ def queue_processor_loop():
             # 第 2 次检查（有锁）：抢到锁了，但队列可能已被 agent_loop 消费光
             if not has_cron_queue():
                 continue
-            print("\n  \033[35m[queue processor] delivering scheduled work\033[0m")
+            cron_debug("[queue processor] delivering scheduled work")
             run_agent_turn_locked()  # 持有锁运行 agent，消费 cron_queue + 调用 LLM
         finally:
             agent_lock.release()  # 即使 run_agent_turn_locked 抛异常也必须释放锁，否则用户永远无法输入
@@ -925,8 +966,9 @@ def queue_processor_loop():
 if __name__ == "__main__":
     print("s14: cron scheduler")
     print("Enter a question, press Enter to send. Type q to quit. OpenAI version.\n")
+    # 启动自动投递线程
     threading.Thread(target=queue_processor_loop, daemon=True).start()
-    print("  \033[35m[queue processor] started\033[0m")
+    cron_debug("[queue processor] started")
     while True:
         try:
             query = input("\033[36ms14 >> \033[0m")
