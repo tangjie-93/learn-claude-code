@@ -802,13 +802,17 @@ def spawn_teammate_thread(name: str, role: str, prompt: str) -> str:
         # Send final summary to Lead
         summary = "Done."
         for msg in reversed(messages):
-            if msg["role"] == "assistant" and isinstance(msg["content"], list):
-                for b in msg["content"]:
-                    if getattr(b, "type", None) == "output_text":
-                        summary = b.text
-                        break
-                else:
+            # Responses input items also include function_call_output events,
+            # which have no role/content fields.
+            if (
+                isinstance(msg, dict)
+                and msg.get("role") == "assistant"
+                and isinstance(msg.get("content"), list)
+            ):
+                text = extract_text(msg["content"])
+                if not text:
                     continue
+                summary = text
                 break
         BUS.send(name, "lead", summary, "result")
         active_teammates.pop(name, None)
@@ -1047,9 +1051,7 @@ def agent_loop(messages: list, context: dict):
             messages.append(
                 {
                     "role": "assistant",
-                    "content": [
-                        {"type": "text", "text": f"[Error] {type(e).__name__}: {e}"}
-                    ],
+                    "content": f"[Error] {type(e).__name__}: {e}",
                 }
             )
             return
@@ -1085,13 +1087,11 @@ def agent_loop(messages: list, context: dict):
                     }
                 )
 
-        # Merge background tool results + notifications into one user message
-        user_content = list(results)
+        # Responses API requires function_call_output items at the top level.
+        messages.extend(results)
         bg_notifications = collect_background_results()
         if bg_notifications:
-            for notif in bg_notifications:
-                user_content.append({"type": "text", "text": notif})
-        messages.append({"role": "user", "content": user_content})
+            messages.append({"role": "user", "content": "\n".join(bg_notifications)})
         context = update_context(context, messages)
         system = get_system_prompt(context)
 
@@ -1102,11 +1102,12 @@ if __name__ == "__main__":
     history = []
     context = update_context({}, [])
 
-    # input() and a 1s poller (teammate inbox or background results) feed one
-    # event queue (issues #291, #46).
+    # 统一事件队列：input_reader（用户输入）和 inbox_poller（异步结果）
+    # 两个线程向同一个队列投递事件，主循环统一消费。
     events = queue.Queue()
 
     def input_reader():
+        """用户输入线程：阻塞等待 stdin，将用户输入或退出信号放入事件队列。"""
         while True:
             try:
                 line = input("\033[36ms15 >> \033[0m")
@@ -1116,10 +1117,10 @@ if __name__ == "__main__":
             events.put(("user", line))
 
     def inbox_poller():
-        # Poll ~1s and wake the Lead when async results are ready: teammate
-        # inbox messages or completed background tasks. Don't gate on
-        # active_teammates: a teammate sends its result and then removes itself,
-        # so the final message can outlive its registry entry.
+        """收件箱轮询线程：每 1 秒检查队友消息或后台任务是否完成，
+        有结果时向事件队列投递 "wake" 事件唤醒 Lead。
+        不用 active_teammates 做门控：队友发完结果后从注册表移除自己，
+        最后一封邮件可能漂在队列外。"""
         while True:
             time.sleep(1)
             if BUS.peek("lead") or has_pending_background():
@@ -1128,16 +1129,22 @@ if __name__ == "__main__":
     threading.Thread(target=input_reader, daemon=True).start()
     threading.Thread(target=inbox_poller, daemon=True).start()
 
+    # 标记是否有过队友，用于在所有队友完成后打印通知
     had_teammates = False
     while True:
+        # 阻塞等待事件（用户输入 或 异步结果就绪）
         kind, payload = events.get()
         if kind == "quit":
             break
         if kind == "user":
-            if payload.strip().lower() in ("q", "exit", ""):
+            command = payload.strip().lower()
+            if command in ("q", "exit"):
                 break
+            if not command:
+                # 空行不是退出命令，忽略后继续等待下一次输入。
+                continue
             history.append({"role": "user", "content": payload})
-        else:  # "wake": teammate inbox or background results are ready
+        else:  # "wake": 队友消息或后台任务结果就绪
             parts = []
             inbox = BUS.read_inbox("lead")
             if inbox:
@@ -1150,22 +1157,24 @@ if __name__ == "__main__":
             bg = collect_background_results()
             parts.extend(bg)
             if not parts:
-                continue  # already drained by an earlier wake (idempotent)
+                # 幂等保护：上一轮可能已消费完，本轮 wake 事件为空则跳过
+                continue
             history.append({"role": "user", "content": "\n".join(parts)})
             print(
                 f"\n\033[33m[wake: {len(inbox)} inbox + {len(bg)} background "
                 f"-> new turn]\033[0m"
             )
 
-        # One turn for whichever source woke us.
+        # 不论是用户输入还是 wake 唤醒，都执行一轮 agent 循环。
         agent_loop(history, context)
         context = update_context(context, history)
-        for block in history[-1]["content"]:
-            # model_dump 后 block 是普通 dict，不能用 getattr
-            if isinstance(block, dict) and block.get("type") == "output_text":
-                print(block.get("text", ""))
+        # 统一打印 Responses API 的 output_text、text 以及异常文本。
+        if history and isinstance(history[-1], dict):
+            reply = extract_text(history[-1].get("content"))
+            if reply:
+                print(reply)
 
-        # Announce once when every teammate has finished and its output drained.
+        # 所有队友完成且邮箱和后台任务均已清空时，打印通知
         if active_teammates:
             had_teammates = True
         elif had_teammates and not BUS.peek("lead") and not has_pending_background():
