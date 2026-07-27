@@ -3,6 +3,7 @@
 启动时调用 configure() 一次设置工作目录。
 """
 
+import locale
 import subprocess
 from pathlib import Path
 
@@ -44,8 +45,8 @@ def run_bash(command: str, cwd: Path | None = None) -> str:
             ),  # 命令执行的工作目录，默认用全局 workdir
             capture_output=True,  # 截获 stdout 和 stderr，存到 r.stdout/r.stderr，不直接打印到终端
             text=True,  # 输出自动解码为字符串（str），不加则是 bytes 类型
-            encoding="utf-8",  # Windows 默认可能是 gbk，显式使用 UTF-8 以兼容仓库文本
-            errors="replace",  # 遇到非 UTF-8 字节时替换，避免后台 reader 线程抛 UnicodeDecodeError
+            encoding=locale.getpreferredencoding(False),
+            errors="replace",
             timeout=120,  # 命令最多跑 120 秒，超时抛 TimeoutExpired 异常
         )
         out = ((r.stdout or "") + (r.stderr or "")).strip()
