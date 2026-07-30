@@ -75,6 +75,112 @@ WORKDIR = Path.cwd()
 tools_configure(WORKDIR)
 client = OpenAI(**client_kwargs)
 MODEL = os.getenv("OPENAI_MODEL", "gpt-5.5")
+EXECUTION_LOG = Path(__file__).resolve().parent / "s18_execution.log"
+
+
+_trace_index = 0
+_trace_lock = threading.Lock()
+_log_write_failure_reported = False
+
+
+def actor_label(actor: str) -> str:
+    """返回用于控制台和日志文件的角色标签。"""
+    return "Lead/主线程" if actor.lower() == "lead" else f"Teammate/{actor}/后台线程"
+
+
+def _fallback_log_path() -> Path:
+    """生成当前进程的备用日志路径。"""
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S_%f")
+    return EXECUTION_LOG.with_name(f"{EXECUTION_LOG.stem}_{timestamp}.log")
+
+
+def _append_execution_log(content: str):
+    """追加日志；当当前文件被占用时自动切换到备用文件。"""
+    global EXECUTION_LOG, _log_write_failure_reported
+    try:
+        with EXECUTION_LOG.open("a", encoding="utf-8") as log_file:
+            log_file.write(content)
+        return
+    except OSError:
+        EXECUTION_LOG = _fallback_log_path()
+
+    try:
+        with EXECUTION_LOG.open("a", encoding="utf-8") as log_file:
+            log_file.write(content)
+        print(f"日志文件被占用，已切换到：{EXECUTION_LOG}")
+    except OSError as error:
+        if not _log_write_failure_reported:
+            print(f"日志写入失败，后续仅输出到控制台：{error}")
+            _log_write_failure_reported = True
+
+
+def write_execution_log(content: str):
+    """以线程安全方式追加完整执行日志。"""
+    with _trace_lock:
+        _append_execution_log(content)
+
+
+def trace(actor: str, event: str):
+    """按发生顺序输出智能体生命周期事件。"""
+    global _trace_index
+    with _trace_lock:
+        _trace_index += 1
+        message = f"{_trace_index}. {actor_label(actor)} {event}"
+        print(message)
+        _append_execution_log(f"[{datetime.now():%H:%M:%S}] {message}\n")
+
+
+def record_model_response(actor: str, response):
+    """把模型非推理输出写入日志。"""
+    outputs = []
+    for item in response.output:
+        data = item if isinstance(item, dict) else item.model_dump()
+        if data.get("type") in {"reasoning", "rerasong"}:
+            continue
+        outputs.append(data)
+    if outputs:
+        payload = json.dumps(outputs, ensure_ascii=False, indent=2, default=str)
+        write_execution_log(
+            f"\n[{datetime.now():%H:%M:%S}] {actor_label(actor)} 模型返回\n"
+            f"{payload}\n"
+        )
+
+
+def record_tool_result(actor: str, name: str, output):
+    """把工具原始结果写入日志。"""
+    payload = json.dumps(output, ensure_ascii=False, indent=2, default=str)
+    write_execution_log(
+        f"\n[{datetime.now():%H:%M:%S}] {actor_label(actor)} 工具结果：{name}\n"
+        f"{payload}\n"
+    )
+
+
+def reset_execution_log():
+    """清空当前进程的执行日志文件。"""
+    global EXECUTION_LOG
+    with _trace_lock:
+        try:
+            EXECUTION_LOG.write_text("", encoding="utf-8")
+        except OSError:
+            EXECUTION_LOG = _fallback_log_path()
+            _append_execution_log("")
+
+
+def format_tool_call(name: str, arguments: dict) -> str:
+    """把工具名和参数压缩成单行。"""
+    values = []
+    for value in arguments.values():
+        rendered = json.dumps(value, ensure_ascii=False, default=str)
+        values.append(rendered if len(rendered) <= 80 else f"{rendered[:77]}...")
+    return f"{name}({', '.join(values)})"
+
+
+def format_tool_result(name: str, output) -> str:
+    """把工具返回值压缩成适合控制台的状态行。"""
+    text = str(output)
+    if text.startswith("Error:"):
+        return f"WORK: {name} 失败：{text[:120]}"
+    return f"WORK: {name} 完成"
 
 # ── Task System (from s12 + s18 worktree field) ──
 
@@ -523,12 +629,14 @@ def idle_poll(agent_name: str, messages: list, name: str, role: str) -> str:
                         f"  \033[35m[protocol] {name} approved shutdown "
                         f"in idle ({req_id})\033[0m"
                     )
+                    trace(name, f"IDLE 收到 shutdown 请求 ({req_id})")
                     return "shutdown"
 
             messages.append(
                 {"role": "user", "content": "<inbox>" + json.dumps(inbox) + "</inbox>"}
             )
             print(f"  \033[36m[idle] {name} found inbox messages\033[0m")
+            trace(name, f"IDLE 收到 {len(inbox)} 条收件箱消息")
             return "work"
 
         unclaimed = scan_unclaimed_tasks()
@@ -551,10 +659,13 @@ def idle_poll(agent_name: str, messages: list, name: str, role: str) -> str:
                     f"  \033[32m[idle] {name} auto-claimed: "
                     f"{task_data['subject']}\033[0m"
                 )
+                trace(name, f"IDLE 自动认领任务：{task_data['subject']}")
                 return "work"
             print(f"  \033[33m[idle] {name} claim failed: " f"{result}\033[0m")
+            trace(name, f"IDLE 认领失败：{result}")
 
     print(f"  \033[31m[idle] {name} timeout ({IDLE_TIMEOUT}s)\033[0m")
+    trace(name, f"IDLE 超时：{IDLE_TIMEOUT}s")
     return "timeout"
 
 
@@ -657,11 +768,28 @@ def spawn_teammate_thread(name: str, role: str, prompt: str) -> str:
 
         def _run_complete_task(task_id: str):
             """完成任务并清除队友当前的工作树上下文。"""
+            task = load_task(task_id)
             result = complete_task(task_id)
+            if "Completed" in result and task.worktree:
+                BUS.send(
+                    name,
+                    "lead",
+                    (
+                        f"Task {task.id} is complete. "
+                        f"Please remove worktree '{task.worktree}'."
+                    ),
+                    "message",
+                    {
+                        "task_id": task.id,
+                        "worktree": task.worktree,
+                        "action": "remove_worktree",
+                    },
+                )
             wt_ctx["path"] = None
             return result
 
         messages = [{"role": "user", "content": prompt}]
+        trace(name, f"线程启动（角色：{role}）")
         sub_tools = [
             {
                 "type": "function",
@@ -796,6 +924,7 @@ def spawn_teammate_thread(name: str, role: str, prompt: str) -> str:
                         )
 
                 try:
+                    trace(name, "WORK: 调用大模型")
                     response = client.responses.create(
                         model=MODEL,
                         instructions=system,
@@ -804,15 +933,22 @@ def spawn_teammate_thread(name: str, role: str, prompt: str) -> str:
                         max_output_tokens=8000,
                     )
                 except Exception:
+                    trace(name, "WORK: 模型请求失败")
                     break
+                record_model_response(name, response)
                 messages.extend(as_input_item(item) for item in response.output)
                 if not function_calls(response):
+                    trace(name, "WORK: 没有新的工具调用，进入 IDLE")
                     break
                 results = []
                 for block in function_calls(response):
                     if block.type == "function_call":
+                        arguments = call_args(block)
+                        trace(name, f"WORK: {format_tool_call(block.name, arguments)}")
                         handler = sub_handlers.get(block.name)
-                        output = handler(**call_args(block)) if handler else "Unknown"
+                        output = handler(**arguments) if handler else "Unknown"
+                        trace(name, format_tool_result(block.name, output))
+                        record_tool_result(name, block.name, output)
                         results.append(
                             {
                                 "type": "function_call_output",
@@ -845,6 +981,7 @@ def spawn_teammate_thread(name: str, role: str, prompt: str) -> str:
                 break
         BUS.send(name, "lead", summary, "result")
         active_teammates.pop(name, None)
+        trace(name, "线程结束")
         print(f"  \033[32m[teammate] {name} finished\033[0m")
 
     active_teammates[name] = True
@@ -1228,6 +1365,7 @@ def agent_loop(messages: list, context: dict):
     system = get_system_prompt(context)
     while True:
         try:
+            trace("Lead", "调用大模型")
             response = client.responses.create(
                 model=MODEL,
                 instructions=system,
@@ -1236,6 +1374,7 @@ def agent_loop(messages: list, context: dict):
                 max_output_tokens=8000,
             )
         except Exception as e:
+            trace("Lead", f"模型请求失败：{type(e).__name__}: {e}")
             messages.append(
                 {
                     "role": "assistant",
@@ -1246,18 +1385,24 @@ def agent_loop(messages: list, context: dict):
             )
             return
 
+        record_model_response("Lead", response)
         messages.extend(as_input_item(item) for item in response.output)
         if not function_calls(response):
+            text = extract_text(response)
+            if text:
+                trace("Lead", f"回复：{text[:200]!r}")
             return response
 
         results = []
         for block in function_calls(response):
             if block.type != "function_call":
                 continue
-            print(f"\033[36m> {block.name}\033[0m")
+            arguments = call_args(block)
+            trace("Lead", f"工具调用：{format_tool_call(block.name, arguments)}")
             handler = TOOL_HANDLERS.get(block.name)
-            output = handler(**call_args(block)) if handler else "Unknown"
-            print(str(output)[:300])
+            output = handler(**arguments) if handler else "Unknown"
+            trace("Lead", format_tool_result(block.name, output))
+            record_tool_result("Lead", block.name, output)
             results.append(
                 {
                     "type": "function_call_output",
@@ -1271,6 +1416,8 @@ def agent_loop(messages: list, context: dict):
 
 
 if __name__ == "__main__":
+    reset_execution_log()
+    print(f"执行日志文件：{EXECUTION_LOG}")
     print("s18: worktree isolation")
     print("Enter a question, press Enter to send. Type q to quit. OpenAI version.\n")
     history = []
