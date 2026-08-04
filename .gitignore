@@ -235,3 +235,5 @@ analysis/
 analysis_progress.md
 .npm-cache/*
 .vscode/*
+web-vue/node_modules/
+web-vue/dist/

@@ -66,14 +66,19 @@ TOOL_HANDLERS = {"bash": bash_command}
 
 def agent_loop(messages: list) -> None:
     """Main loop for the agent loop."""
-    response = client.responses.create(
-        model=Model,
-        input=messages,
-        instruction=SYSTEM_PROMPT,
-        tools=TOOLS,
-        max_output_tokens=8000,
-    )
-    return response.choices[0].message.content
+    while True:
+        # 把当前历史消息、系统提示词和工具列表一起发给 OpenAI。
+        response = client.responses.create(
+            model=Model,
+            input=messages,
+            instruction=SYSTEM_PROMPT,
+            tools=TOOLS,
+            max_output_tokens=8000,
+        )
+        # 把模型这一轮输出追加到历史里。
+        # 这样下一轮请求时，模型能看到自己刚才说了什么、调用了什么工具。
+        content = [as_input_item(item) for item in response.output]
+        messages.append({"role": "assistant", "content": content})
 
 
 if __name__ == "__main__":
