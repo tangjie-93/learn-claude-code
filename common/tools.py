@@ -45,8 +45,10 @@ def run_bash(command: str, cwd: Path | None = None) -> str:
             ),  # 命令执行的工作目录，默认用全局 workdir
             capture_output=True,  # 截获 stdout 和 stderr，存到 r.stdout/r.stderr，不直接打印到终端
             text=True,  # 输出自动解码为字符串（str），不加则是 bytes 类型
-            encoding=locale.getpreferredencoding(False),
-            errors="replace",
+            encoding=locale.getpreferredencoding(
+                False
+            ),  # 使用系统当前编码（如 Windows 的 cp936），避免乱码
+            errors="replace",  # 遇到无法解码的字符用 � 替代而不是抛异常
             timeout=120,  # 命令最多跑 120 秒，超时抛 TimeoutExpired 异常
         )
         out = ((r.stdout or "") + (r.stderr or "")).strip()
@@ -58,7 +60,11 @@ def run_bash(command: str, cwd: Path | None = None) -> str:
 def run_read(path: str, limit: int | None = None, cwd: Path | None = None) -> str:
     """读取文件内容。可限制返回前 N 行。"""
     try:
-        lines = safe_path(path, cwd).read_text(encoding="utf-8", errors="replace").splitlines()
+        lines = (
+            safe_path(path, cwd)
+            .read_text(encoding="utf-8", errors="replace")
+            .splitlines()
+        )
         if limit and limit < len(lines):
             lines = lines[:limit] + [f"... ({len(lines) - limit} more lines)"]
         return "\n".join(lines)
