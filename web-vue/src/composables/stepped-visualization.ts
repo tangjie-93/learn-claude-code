@@ -3,19 +3,21 @@ import { computed, onBeforeUnmount, ref } from "vue";
 interface SteppedVisualizationOptions {
   totalSteps: number;
   autoPlayInterval?: number;
+  initialStep?: number;
 }
 
 export function useSteppedVisualization({
   totalSteps,
   autoPlayInterval = 2000,
+  initialStep = 0,
 }: SteppedVisualizationOptions) {
-  const currentStep = ref(0);
-  const isPlaying = ref(false);
-  let timer: ReturnType<typeof setInterval> | undefined;
-
   function clamp(step: number) {
     return Math.max(0, Math.min(step, totalSteps - 1));
   }
+
+  const currentStep = ref(clamp(initialStep));
+  const isPlaying = ref(false);
+  let timer: ReturnType<typeof setInterval> | undefined;
 
   function clearTimer() {
     if (timer) {

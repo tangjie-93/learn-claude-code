@@ -137,6 +137,7 @@ const stepInfoList = [
 const { currentStep, totalSteps, next, prev, reset, isPlaying, toggleAutoPlay } = useSteppedVisualization({
   totalSteps: stepInfoList.length,
   autoPlayInterval: 2500,
+  initialStep: stepInfoList.length - 1,
 });
 
 const activeNodes = computed(() => new Set(activeNodesPerStep[currentStep.value]));

@@ -25,6 +25,17 @@ function mountHarness(totalSteps = 3, autoPlayInterval = 100) {
   );
 }
 
+function mountHarnessAt(initialStep: number, totalSteps = 3) {
+  return mount(
+    defineComponent({
+      setup() {
+        return useSteppedVisualization({ totalSteps, initialStep });
+      },
+      template: `<output data-testid="step">{{ currentStep }}</output>`,
+    })
+  );
+}
+
 describe("useSteppedVisualization", () => {
   afterEach(() => {
     vi.useRealTimers();
@@ -70,5 +81,11 @@ describe("useSteppedVisualization", () => {
 
     expect(wrapper.find('[data-testid="step"]').text()).toBe("0");
     expect(wrapper.find('[data-testid="playing"]').text()).toBe("false");
+  });
+
+  it("can start at a clamped initial step", () => {
+    expect(mountHarnessAt(2).find('[data-testid="step"]').text()).toBe("2");
+    expect(mountHarnessAt(9).find('[data-testid="step"]').text()).toBe("2");
+    expect(mountHarnessAt(-1).find('[data-testid="step"]').text()).toBe("0");
   });
 });
