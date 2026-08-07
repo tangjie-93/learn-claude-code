@@ -35,12 +35,12 @@
                 </div>
               </RouterLink>
             </div>
+            <div v-if="index < app.layers.length - 1" class="layer-composition-indicator" aria-hidden="true">
+              <svg viewBox="0 0 20 12">
+                <path d="M10 0v12M5 7l5 5 5-5" />
+              </svg>
+            </div>
           </article>
-          <div v-if="index < app.layers.length - 1" class="layer-composition-indicator" aria-hidden="true">
-            <svg viewBox="0 0 24 24">
-              <path d="M12 5v14m0 0 6-6m-6 6-6-6" />
-            </svg>
-          </div>
         </template>
       </div>
     </section>

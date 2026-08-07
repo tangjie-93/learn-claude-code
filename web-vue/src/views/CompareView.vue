@@ -73,24 +73,55 @@
       </section>
 
       <div v-if="comparison" class="compare-results">
-        <article class="stat-card">
-          <span>{{ app.t("compare", "loc_delta") }}</span>
-          <strong>{{ comparison.locDelta >= 0 ? `+${comparison.locDelta}` : comparison.locDelta }}</strong>
+        <article class="stat-card stat-card-loc">
+          <header>
+            <svg viewBox="0 0 24 24" aria-hidden="true">
+              <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" />
+              <path d="M14 2v6h6M8 13h8M8 17h5" />
+            </svg>
+            <span>{{ app.t("compare", "loc_delta") }}</span>
+          </header>
+          <strong>
+            <span>{{ comparison.locDelta >= 0 ? `+${comparison.locDelta}` : comparison.locDelta }}</span>
+            <small>{{ app.t("compare", "lines") }}</small>
+          </strong>
         </article>
-        <article class="stat-card">
-          <span>{{ app.t("compare", "new_tools_in_b") }}</span>
+        <article class="stat-card stat-card-tools">
+          <header>
+            <svg viewBox="0 0 24 24" aria-hidden="true">
+              <path d="m14.7 6.3 3 3M5 19l6.5-6.5M13 5l6 6-8 8H5v-6z" />
+            </svg>
+            <span>{{ app.t("compare", "new_tools_in_b") }}</span>
+          </header>
           <strong>{{ comparison.toolsOnlyB.length }}</strong>
-          <p>{{ comparison.toolsOnlyB.join(", ") || app.t("compare", "none") }}</p>
+          <div v-if="comparison.toolsOnlyB.length" class="stat-tag-list">
+            <span v-for="tool in comparison.toolsOnlyB" :key="tool">{{ tool }}</span>
+          </div>
         </article>
-        <article class="stat-card">
-          <span>{{ app.t("compare", "new_classes_in_b") }}</span>
+        <article class="stat-card stat-card-classes">
+          <header>
+            <svg viewBox="0 0 24 24" aria-hidden="true">
+              <path d="M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z" />
+              <path d="M3.3 7 12 12l8.7-5M12 22V12" />
+            </svg>
+            <span>{{ app.t("compare", "new_classes_in_b") }}</span>
+          </header>
           <strong>{{ comparison.newClasses.length }}</strong>
-          <p>{{ comparison.newClasses.join(", ") || app.t("compare", "none") }}</p>
+          <div v-if="comparison.newClasses.length" class="stat-tag-list">
+            <span v-for="item in comparison.newClasses" :key="item">{{ item }}</span>
+          </div>
         </article>
-        <article class="stat-card">
-          <span>{{ app.t("compare", "new_functions_in_b") }}</span>
+        <article class="stat-card stat-card-functions">
+          <header>
+            <svg viewBox="0 0 24 24" aria-hidden="true">
+              <path d="M8 21s4-9 4-18M7 5h10M5 12h14" />
+            </svg>
+            <span>{{ app.t("compare", "new_functions_in_b") }}</span>
+          </header>
           <strong>{{ comparison.newFunctions.length }}</strong>
-          <p>{{ comparison.newFunctions.join(", ") || app.t("compare", "none") }}</p>
+          <div v-if="comparison.newFunctions.length" class="stat-tag-list">
+            <span v-for="item in comparison.newFunctions" :key="item">{{ item }}</span>
+          </div>
         </article>
       </div>
 
@@ -98,16 +129,25 @@
         <h2>{{ app.t("compare", "tool_comparison") }}</h2>
         <div class="tool-columns">
           <article>
-            <h3>{{ app.t("compare", "only_in") }} {{ comparison.left.id }}</h3>
-            <p>{{ comparison.toolsOnlyA.join(", ") || app.t("compare", "none") }}</p>
+            <h3>{{ app.t("compare", "only_in") }} {{ app.versionLabel(comparison.left.id) }}</h3>
+            <p v-if="!comparison.toolsOnlyA.length">{{ app.t("compare", "none") }}</p>
+            <div v-else class="tool-pill-list only-left">
+              <span v-for="tool in comparison.toolsOnlyA" :key="tool">{{ tool }}</span>
+            </div>
           </article>
           <article>
             <h3>{{ app.t("compare", "shared") }}</h3>
-            <p>{{ comparison.toolsShared.join(", ") || app.t("compare", "none") }}</p>
+            <p v-if="!comparison.toolsShared.length">{{ app.t("compare", "none") }}</p>
+            <div v-else class="tool-pill-list shared">
+              <span v-for="tool in comparison.toolsShared" :key="tool">{{ tool }}</span>
+            </div>
           </article>
           <article>
-            <h3>{{ app.t("compare", "only_in") }} {{ comparison.right.id }}</h3>
-            <p>{{ comparison.toolsOnlyB.join(", ") || app.t("compare", "none") }}</p>
+            <h3>{{ app.t("compare", "only_in") }} {{ app.versionLabel(comparison.right.id) }}</h3>
+            <p v-if="!comparison.toolsOnlyB.length">{{ app.t("compare", "none") }}</p>
+            <div v-else class="tool-pill-list only-right">
+              <span v-for="tool in comparison.toolsOnlyB" :key="tool">{{ tool }}</span>
+            </div>
           </article>
         </div>
       </section>

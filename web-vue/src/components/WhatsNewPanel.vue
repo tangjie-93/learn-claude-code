@@ -4,25 +4,25 @@
     <div class="whats-new-grid">
       <article v-if="diff?.newClasses.length" class="whats-new-card">
         <h3>{{ app.t("diff", "new_classes") }}</h3>
-        <ul>
-          <li v-for="item in diff.newClasses" :key="item">{{ item }}</li>
-        </ul>
+        <div class="whats-new-class-list">
+          <span v-for="item in diff.newClasses" :key="item">{{ item }}</span>
+        </div>
       </article>
       <article v-if="diff?.newTools.length" class="whats-new-card">
         <h3>{{ app.t("diff", "new_tools") }}</h3>
-        <ul>
-          <li v-for="item in diff.newTools" :key="item">{{ item }}</li>
-        </ul>
+        <div class="whats-new-tool-list">
+          <span v-for="item in diff.newTools" :key="item">{{ item }}</span>
+        </div>
       </article>
       <article v-if="diff?.newFunctions.length" class="whats-new-card">
         <h3>{{ app.t("diff", "new_functions") }}</h3>
         <ul>
-          <li v-for="item in diff.newFunctions" :key="item">{{ item }}</li>
+          <li v-for="item in diff.newFunctions" :key="item"><span>def</span> {{ item }}()</li>
         </ul>
       </article>
       <article class="whats-new-card">
         <h3>{{ app.t("diff", "loc_delta") }}</h3>
-        <strong>{{ diff && diff.locDelta >= 0 ? `+${diff.locDelta}` : diff?.locDelta }}</strong>
+        <strong>{{ diff && diff.locDelta >= 0 ? `+${diff.locDelta}` : diff?.locDelta }} lines</strong>
       </article>
     </div>
   </section>

@@ -2,7 +2,12 @@
   <div class="architecture-panel">
     <div v-if="classes.length" class="class-stack">
       <template v-for="(item, index) in reversedClasses" :key="item.name">
-        <article :class="{ fresh: newClassNames.has(item.name) }">
+        <article
+          :class="[
+            { fresh: newClassNames.has(item.name) },
+            newClassNames.has(item.name) ? `fresh-${app.versionMeta[item.introducedIn]?.layer || 'default'}` : '',
+          ]"
+        >
           <div>
             <strong>{{ item.name }}</strong>
             <span>{{ classDescriptions[item.name] || `Introduced in ${item.introducedIn}` }}</span>
@@ -42,5 +47,17 @@ const classDescriptions: Record<string, string> = {
   MemoryManager: "Long-term memory retrieval",
   CronScheduler: "Background scheduled runs",
   MultiAgentCoordinator: "Parallel sub-agent coordination",
+  TodoManager: "Visible task planning with constraints",
+  SkillLoader: "Dynamic knowledge injection from SKILL.md files",
+  Task: "File-based persistent task with dependencies",
+  TaskManager: "File-based persistent task CRUD with dependencies",
+  BackgroundTask: "Single background execution unit",
+  BackgroundManager: "Non-blocking thread execution + notification queue",
+  TeammateManager: "Multi-agent team lifecycle and coordination",
+  Teammate: "Individual agent identity and state tracking",
+  SharedBoard: "Cross-agent shared state coordination",
+  ProtocolState: "Pending team protocol requests and response matching",
+  MCPClient: "External tool discovery and invocation client",
+  RecoveryState: "Retry, fallback, and continuation state",
 };
 </script>
