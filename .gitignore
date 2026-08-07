@@ -237,3 +237,5 @@ analysis_progress.md
 .vscode/*
 web-vue/node_modules/
 web-vue/dist/
+output/
+.playwright-cli/

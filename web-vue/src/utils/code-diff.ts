@@ -19,7 +19,7 @@ export type SplitDiffRow = {
 };
 
 function linesFromChange(value: string) {
-  return value.replace(/\n$/, "").split("\n").filter((line, index, lines) => line !== "" || index < lines.length - 1);
+  return value.replace(/\n$/, "").split("\n");
 }
 
 export function buildUnifiedDiffRows(oldSource: string, newSource: string): UnifiedDiffRow[] {

@@ -1,7 +1,7 @@
 <template>
   <div class="learn-layout">
     <AppSidebar />
-    <section class="content-column">
+    <section class="content-column compare-page">
       <div class="page-heading">
         <h1>{{ app.t("compare", "title") }}</h1>
         <p>{{ app.t("compare", "subtitle") }}</p>
@@ -17,7 +17,7 @@
             </option>
           </select>
         </label>
-        <span class="compare-arrow" aria-hidden="true">-&gt;</span>
+        <span class="compare-arrow" aria-hidden="true">→</span>
         <label>
           {{ app.t("compare", "select_b") }}
           <select v-model="app.compareB">
@@ -125,7 +125,7 @@
         </article>
       </div>
 
-      <section v-if="comparison" class="simple-panel">
+      <section v-if="comparison" class="simple-panel tool-comparison-panel">
         <h2>{{ app.t("compare", "tool_comparison") }}</h2>
         <div class="tool-columns">
           <article>

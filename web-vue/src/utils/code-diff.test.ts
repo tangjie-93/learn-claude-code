@@ -10,6 +10,13 @@ describe("code diff helpers", () => {
     expect(rows.at(-1)).toMatchObject({ oldNum: null, newNum: 4, text: "d" });
   });
 
+  it("preserves empty lines like the original diff view", () => {
+    const rows = buildUnifiedDiffRows("a\n\nb\n", "a\n\nB\n");
+
+    expect(rows.map((row) => row.text)).toEqual(["a", "", "b", "B"]);
+    expect(rows[1]).toMatchObject({ oldNum: 2, newNum: 2, type: "context", text: "" });
+  });
+
   it("builds split rows pairing replacements side by side", () => {
     const rows = buildSplitDiffRows("a\nb\n", "a\nB\n");
 

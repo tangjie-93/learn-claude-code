@@ -11,8 +11,7 @@
         class="sidebar-link"
         :to="`/${app.locale}/${version}`"
       >
-        <span>{{ version }}</span>
-        {{ app.versionLabel(version) }}
+        <span class="sidebar-link-id">{{ version }}</span><span class="sidebar-link-title">{{ app.versionLabel(version) }}</span>
       </RouterLink>
     </section>
   </aside>

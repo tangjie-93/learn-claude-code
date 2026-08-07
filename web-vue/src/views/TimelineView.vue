@@ -47,7 +47,7 @@
               <p v-if="app.versionMeta[id].keyInsight">
                 &quot;{{ app.versionMeta[id].keyInsight }}&quot;
               </p>
-              <strong>{{ app.t("timeline", "learn_more") }} -&gt;</strong>
+              <strong>{{ app.t("timeline", "learn_more") }} →</strong>
             </RouterLink>
           </div>
         </div>

@@ -2,6 +2,25 @@
   <div class="learn-layout">
     <AppSidebar />
     <section v-if="version" class="content-column version-detail">
+      <header class="version-hero">
+        <div class="version-title-row">
+          <span class="version-id">{{ version.id }}</span>
+          <h1>{{ app.versionLabel(version.id) }}</h1>
+          <LayerBadge :layer="app.versionMeta[version.id].layer">
+            {{ app.t("layer_labels", app.versionMeta[version.id].layer) }}
+          </LayerBadge>
+        </div>
+        <p>{{ app.versionMeta[version.id].subtitle }}</p>
+        <div class="version-hero-meta">
+          <span>{{ version.loc }} LOC</span>
+          <span>{{ version.tools.length }} {{ app.t("version", "tools") }}</span>
+          <span v-if="app.versionMeta[version.id].coreAddition">{{ app.versionMeta[version.id].coreAddition }}</span>
+        </div>
+        <blockquote v-if="app.versionMeta[version.id].keyInsight">
+          {{ app.versionMeta[version.id].keyInsight }}
+        </blockquote>
+      </header>
+
       <SessionVisualization :version="version.id" :title="app.t('viz', version.id)" />
 
       <VersionTabs :tabs="tabs" v-slot="{ active }">
@@ -39,6 +58,7 @@ import AppSidebar from "@/components/AppSidebar.vue";
 import ArchitecturePanel from "@/components/ArchitecturePanel.vue";
 import DesignDecisionsPanel from "@/components/DesignDecisionsPanel.vue";
 import ExecutionFlowPanel from "@/components/ExecutionFlowPanel.vue";
+import LayerBadge from "@/components/LayerBadge.vue";
 import MarkdownBlock from "@/components/MarkdownBlock.vue";
 import SessionVisualization from "@/components/SessionVisualization.vue";
 import SimulatorPanel from "@/components/SimulatorPanel.vue";

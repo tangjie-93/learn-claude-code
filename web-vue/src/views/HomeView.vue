@@ -5,7 +5,7 @@
       <p>{{ app.t("home", "hero_subtitle") }}</p>
       <RouterLink class="primary-action" :to="`/${app.locale}/timeline`">
         {{ app.t("home", "start") }}
-        <span aria-hidden="true">-&gt;</span>
+        <span aria-hidden="true">→</span>
       </RouterLink>
     </section>
 

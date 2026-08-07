@@ -17,7 +17,7 @@
         <div v-if="index < reversedClasses.length - 1" class="class-arrow" aria-hidden="true">↓</div>
       </template>
     </div>
-    <p v-else>No classes in this version. The implementation is function based.</p>
+    <div v-else class="architecture-empty">No classes in this version (functions only)</div>
 
     <div v-if="version?.tools.length" class="tool-cloud">
       <span v-for="tool in version.tools" :key="tool">{{ tool }}</span>

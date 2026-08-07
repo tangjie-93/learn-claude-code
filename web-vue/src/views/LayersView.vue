@@ -1,7 +1,7 @@
 <template>
   <div class="learn-layout">
     <AppSidebar />
-    <section class="content-column">
+    <section class="content-column layers-page">
       <div class="page-heading">
         <h1>{{ app.t("layers", "title") }}</h1>
         <p>{{ app.t("layers", "subtitle") }}</p>
@@ -12,7 +12,7 @@
             <header>
               <span :class="['layer-dot', `layer-${layer.id}`]" />
               <div>
-                <h2>L{{ index + 1 }} · {{ app.t("layer_labels", layer.id) }}</h2>
+                <h2><span>L{{ index + 1 }}</span> {{ app.t("layer_labels", layer.id) }}</h2>
                 <p>{{ app.t("layers", layer.id) }}</p>
               </div>
             </header>
@@ -20,19 +20,29 @@
               <RouterLink
                 v-for="version in layer.versions"
                 :key="version"
-                class="version-card"
+                class="layer-version-card"
                 :to="`/${app.locale}/${version}`"
               >
-                <LayerBadge :layer="layer.id">{{ version }}</LayerBadge>
-                <h3>{{ app.versionLabel(version) }}</h3>
-                <p>{{ app.versionMeta[version].subtitle }}</p>
-                <p v-if="app.versionMeta[version].keyInsight" class="layer-key-insight">
-                  {{ app.versionMeta[version].keyInsight }}
-                </p>
+                <div class="layer-card-main">
+                  <div class="layer-card-copy">
+                    <div class="layer-card-badges">
+                      <span>{{ version }}</span>
+                      <LayerBadge :layer="layer.id">{{ layer.id }}</LayerBadge>
+                    </div>
+                    <h3>{{ app.versionLabel(version) }}</h3>
+                    <p>{{ app.versionMeta[version].subtitle }}</p>
+                  </div>
+                  <svg class="layer-card-chevron" viewBox="0 0 24 24" aria-hidden="true">
+                    <path d="m9 18 6-6-6-6" />
+                  </svg>
+                </div>
                 <div class="layer-card-meta">
                   <span>{{ app.getVersion(version)?.loc ?? "?" }} LOC</span>
                   <span>{{ app.getVersion(version)?.tools.length ?? "?" }} tools</span>
                 </div>
+                <p v-if="app.versionMeta[version].keyInsight" class="layer-key-insight">
+                  {{ app.versionMeta[version].keyInsight }}
+                </p>
               </RouterLink>
             </div>
             <div v-if="index < app.layers.length - 1" class="layer-composition-indicator" aria-hidden="true">
