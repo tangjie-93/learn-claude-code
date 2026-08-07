@@ -20,7 +20,7 @@
         <div v-for="(id, index) in app.versionOrder" :key="id" class="timeline-node">
           <div class="timeline-rail">
             <span :class="['timeline-dot', `layer-${app.versionMeta[id].layer}`]">
-              {{ id.replace("s", "") }}
+              {{ id.replace("s", "").replace("_mini", "m") }}
             </span>
             <i
               v-if="index < app.versionOrder.length - 1"

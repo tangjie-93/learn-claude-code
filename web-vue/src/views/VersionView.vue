@@ -12,27 +12,15 @@
           <p>No scenario data for this version.</p>
         </section>
         <SourcePanel v-else-if="active === 'code'" :filename="version.filename" :source="version.source" />
-        <section v-else class="simple-panel">
-          <h2>{{ app.t("version", "execution_flow") }}</h2>
-          <p>{{ app.versionMeta[version.id]?.keyInsight }}</p>
-          <div class="stats-grid">
-            <article>
-              <strong>{{ version.classes.length }}</strong>
-              <span>classes</span>
-            </article>
-            <article>
-              <strong>{{ version.functions.length }}</strong>
-              <span>functions</span>
-            </article>
-            <article>
-              <strong>{{ diff?.locDelta ?? 0 }}</strong>
-              <span>LOC delta</span>
-            </article>
-          </div>
-        </section>
-        <template v-if="active === 'deep-dive'">
-          <ExecutionFlowPanel :version-id="version.id" />
-          <ArchitecturePanel :version-id="version.id" />
+        <template v-else-if="active === 'deep-dive'">
+          <section class="deep-dive-section">
+            <h2>{{ app.t("version", "execution_flow") }}</h2>
+            <ExecutionFlowPanel :version-id="version.id" />
+          </section>
+          <section class="deep-dive-section">
+            <h2>{{ app.t("compare", "architecture") }}</h2>
+            <ArchitecturePanel :version-id="version.id" />
+          </section>
           <WhatsNewPanel :version-id="version.id" />
           <DesignDecisionsPanel :version-id="version.id" />
         </template>
@@ -70,7 +58,6 @@ onBeforeMount(() => app.setLocale(String(route.params.locale || "en")));
 const versionId = computed(() => String(route.params.version || ""));
 const version = computed(() => app.getVersion(versionId.value));
 const doc = computed(() => app.getDoc(versionId.value));
-const diff = computed(() => app.allDiffs.find((item) => item.to === versionId.value));
 const scenario = computed(() => {
   const key = `/src/data/scenarios/${versionId.value}.json`;
   return scenarioModules[key] as Scenario | undefined;

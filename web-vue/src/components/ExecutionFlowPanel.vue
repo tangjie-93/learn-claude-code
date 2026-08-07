@@ -1,6 +1,5 @@
 <template>
-  <section class="simple-panel execution-flow-panel">
-    <h2>Execution flow</h2>
+  <div class="execution-flow-panel">
     <svg v-if="flow.nodes.length" class="flow-svg" :viewBox="viewBox" role="img">
       <defs>
         <marker id="flow-arrow" viewBox="0 0 8 8" refX="7" refY="4" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
@@ -14,6 +13,17 @@
         :d="edge.path"
         marker-end="url(#flow-arrow)"
       />
+      <text
+        v-for="edge in drawableEdges"
+        v-show="edge.label"
+        :key="`${edge.from}-${edge.to}-label`"
+        class="flow-edge-label"
+        :x="edge.midpoint.x"
+        :y="edge.midpoint.y - 6"
+        text-anchor="middle"
+      >
+        {{ edge.label }}
+      </text>
       <g v-for="node in flow.nodes" :key="node.id" :class="['flow-shape', `node-${node.type}`]">
         <polygon
           v-if="node.type === 'decision'"
@@ -40,7 +50,7 @@
       </g>
     </svg>
     <p v-if="!flow.nodes.length">No execution flow data for this version.</p>
-  </section>
+  </div>
 </template>
 
 <script setup lang="ts">
@@ -57,7 +67,9 @@ const drawableEdges = computed(() =>
   flow.value.edges.flatMap((edge) => {
     const from = nodeMap.value.get(edge.from);
     const to = nodeMap.value.get(edge.to);
-    return from && to ? [{ ...edge, path: getEdgePath(from, to) }] : [];
+    return from && to
+      ? [{ ...edge, path: getEdgePath(from, to), midpoint: { x: (from.x + to.x) / 2, y: (from.y + to.y) / 2 } }]
+      : [];
   }),
 );
 

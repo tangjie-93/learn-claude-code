@@ -1,5 +1,5 @@
 <template>
-  <section class="simple-panel code-diff-panel">
+  <div class="code-diff-panel">
     <div class="diff-toolbar">
       <span>{{ oldLabel }} -> {{ newLabel }}</span>
       <div>
@@ -8,28 +8,30 @@
       </div>
     </div>
 
-    <table v-if="mode === 'unified'" class="diff-table unified">
-      <tbody>
-        <tr v-for="(row, index) in unifiedRows" :key="index" :class="row.type">
-          <td>{{ row.oldNum ?? "" }}</td>
-          <td>{{ row.newNum ?? "" }}</td>
-          <td>{{ row.type === "add" ? "+" : row.type === "remove" ? "-" : "" }}</td>
-          <td>{{ row.text }}</td>
-        </tr>
-      </tbody>
-    </table>
+    <div class="diff-table-wrap">
+      <table v-if="mode === 'unified'" class="diff-table unified">
+        <tbody>
+          <tr v-for="(row, index) in unifiedRows" :key="index" :class="row.type">
+            <td>{{ row.oldNum ?? "" }}</td>
+            <td>{{ row.newNum ?? "" }}</td>
+            <td>{{ row.type === "add" ? "+" : row.type === "remove" ? "-" : "" }}</td>
+            <td>{{ row.text }}</td>
+          </tr>
+        </tbody>
+      </table>
 
-    <table v-else class="diff-table split">
-      <tbody>
-        <tr v-for="(row, index) in splitRows" :key="index">
-          <td>{{ row.left.num ?? "" }}</td>
-          <td :class="row.left.type">{{ row.left.text }}</td>
-          <td>{{ row.right.num ?? "" }}</td>
-          <td :class="row.right.type">{{ row.right.text }}</td>
-        </tr>
-      </tbody>
-    </table>
-  </section>
+      <table v-else class="diff-table split">
+        <tbody>
+          <tr v-for="(row, index) in splitRows" :key="index">
+            <td>{{ row.left.num ?? "" }}</td>
+            <td :class="row.left.type">{{ row.left.text }}</td>
+            <td>{{ row.right.num ?? "" }}</td>
+            <td :class="row.right.type">{{ row.right.text }}</td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+  </div>
 </template>
 
 <script setup lang="ts">

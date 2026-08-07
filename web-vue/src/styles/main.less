@@ -156,7 +156,6 @@ select {
   background: transparent;
   color: var(--color-text-secondary);
   padding: 0 6px;
-  font-size: 0;
   cursor: pointer;
 
   &:hover {
@@ -164,17 +163,21 @@ select {
   }
 }
 
-.icon-button::before {
-  content: "◐";
-  font-size: 16px;
-  line-height: 1;
+.icon-button svg,
+.github-link svg,
+.mobile-menu-button svg {
+  width: 18px;
+  height: 18px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.8;
+  stroke-linecap: round;
+  stroke-linejoin: round;
 }
 
-.github-link::before {
-  content: "GH";
-  font-size: 12px;
-  font-weight: 700;
-  letter-spacing: 0;
+.github-link svg {
+  fill: currentColor;
+  stroke: none;
 }
 
 .mobile-menu {
@@ -595,20 +598,9 @@ select {
   padding: 16px;
 
   h3 {
-    margin: 0;
+    margin: 0 0 10px;
     font-size: 14px;
     font-weight: 600;
-  }
-}
-
-.layer-row-title {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-
-  span {
-    color: var(--color-text-secondary);
-    font-size: 12px;
   }
 }
 
@@ -672,6 +664,13 @@ select {
   margin-top: 12px;
   color: var(--color-text-secondary);
   font-size: 12px;
+}
+
+.layer-key-insight {
+  margin-top: 8px;
+  color: var(--color-text-secondary);
+  font-size: 12px;
+  line-height: 1.5;
 }
 
 .timeline-list {

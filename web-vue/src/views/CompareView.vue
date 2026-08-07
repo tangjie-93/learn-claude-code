@@ -17,6 +17,7 @@
             </option>
           </select>
         </label>
+        <span class="compare-arrow" aria-hidden="true">-&gt;</span>
         <label>
           {{ app.t("compare", "select_b") }}
           <select v-model="app.compareB">
@@ -111,13 +112,15 @@
         </div>
       </section>
 
-      <CodeDiffPanel
-        v-if="comparison"
-        :old-source="comparison.left.source"
-        :new-source="comparison.right.source"
-        :old-label="`${comparison.left.id} (${comparison.left.filename})`"
-        :new-label="`${comparison.right.id} (${comparison.right.filename})`"
-      />
+      <section v-if="comparison" class="source-diff-section">
+        <h2>{{ app.t("compare", "source_diff") }}</h2>
+        <CodeDiffPanel
+          :old-source="comparison.left.source"
+          :new-source="comparison.right.source"
+          :old-label="`${comparison.left.id} (${comparison.left.filename})`"
+          :new-label="`${comparison.right.id} (${comparison.right.filename})`"
+        />
+      </section>
 
       <section v-if="!comparison" class="empty-compare">
         <p>{{ app.t("compare", "empty_hint") }}</p>

@@ -72,13 +72,10 @@
         <article v-for="layer in app.layers" :key="layer.id" class="layer-row">
           <div :class="['layer-stripe', `layer-${layer.id}`]" />
           <div>
-            <div class="layer-row-title">
-              <h3>{{ app.t("layer_labels", layer.id) }}</h3>
-              <span>{{ layer.versions.length }} {{ app.t("home", "versions_in_layer") }}</span>
-            </div>
+            <h3>{{ app.t("layer_labels", layer.id) }}</h3>
             <div class="badge-row">
               <RouterLink v-for="version in layer.versions" :key="version" :to="`/${app.locale}/${version}`">
-                <LayerBadge :layer="layer.id">{{ version }}: {{ app.versionLabel(version) }}</LayerBadge>
+                <LayerBadge :layer="layer.id">{{ version }}</LayerBadge>
               </RouterLink>
             </div>
           </div>
