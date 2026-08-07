@@ -16,6 +16,7 @@ const LEGACY_DOCS_DIR = path.join(REPO_ROOT, "docs");
 const OUT_DIR = path.join(WEB_DIR, "src", "data", "generated");
 const PUBLIC_DIR = path.join(WEB_DIR, "public");
 const COURSE_ASSETS_DIR = path.join(PUBLIC_DIR, "course-assets");
+const COURSE_CODE_FILE = "code_openai.py";
 
 type Locale = "en" | "zh" | "ja";
 
@@ -50,7 +51,7 @@ function listRootChapters(): ChapterSource[] {
       const id = dirToVersionId(dirName);
       if (!id) return null;
       const dirPath = path.join(REPO_ROOT, dirName);
-      const codePath = path.join(dirPath, "code.py");
+      const codePath = path.join(dirPath, COURSE_CODE_FILE);
       if (!fs.existsSync(codePath)) return null;
       return { id, dirName, dirPath, codePath };
     })
@@ -110,9 +111,13 @@ function extractFunctions(
 
 function extractTools(source: string): string[] {
   const toolPattern = /"name"\s*:\s*"([\w-]+)"/g;
+  const helperPattern = /function_tool\(\s*["']([\w-]+)["']/g;
   const tools = new Set<string>();
   let match;
   while ((match = toolPattern.exec(source)) !== null) {
+    tools.add(match[1]);
+  }
+  while ((match = helperPattern.exec(source)) !== null) {
     tools.add(match[1]);
   }
   return Array.from(tools);
@@ -214,7 +219,7 @@ function buildRootVersions(chapters: ChapterSource[]): AgentVersion[] {
 
     return {
       id: chapter.id,
-      filename: `${chapter.dirName}/code.py`,
+      filename: `${chapter.dirName}/${COURSE_CODE_FILE}`,
       title: meta?.title ?? chapter.id,
       subtitle: meta?.subtitle ?? "",
       loc: countLoc(lines),

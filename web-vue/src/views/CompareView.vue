@@ -28,27 +28,100 @@
         </label>
       </div>
 
-      <div v-if="left && right" class="compare-results">
+      <div v-if="comparison" class="compare-version-cards">
+        <article class="simple-panel">
+          <header>
+            <h3>{{ app.versionLabel(comparison.left.id) }}</h3>
+            <p>{{ app.versionMeta[comparison.left.id]?.subtitle }}</p>
+          </header>
+          <div class="compare-meta-list">
+            <p>{{ comparison.left.loc }} LOC</p>
+            <p>{{ comparison.left.tools.length }} tools</p>
+            <LayerBadge :layer="app.versionMeta[comparison.left.id].layer">
+              {{ app.versionMeta[comparison.left.id].layer }}
+            </LayerBadge>
+          </div>
+        </article>
+        <article class="simple-panel">
+          <header>
+            <h3>{{ app.versionLabel(comparison.right.id) }}</h3>
+            <p>{{ app.versionMeta[comparison.right.id]?.subtitle }}</p>
+          </header>
+          <div class="compare-meta-list">
+            <p>{{ comparison.right.loc }} LOC</p>
+            <p>{{ comparison.right.tools.length }} tools</p>
+            <LayerBadge :layer="app.versionMeta[comparison.right.id].layer">
+              {{ app.versionMeta[comparison.right.id].layer }}
+            </LayerBadge>
+          </div>
+        </article>
+      </div>
+
+      <section v-if="comparison" class="compare-architecture">
+        <h2>{{ app.t("compare", "architecture") }}</h2>
+        <div class="code-compare">
+          <div>
+            <h3>{{ app.versionLabel(comparison.left.id) }}</h3>
+            <ArchitecturePanel :version-id="comparison.left.id" />
+          </div>
+          <div>
+            <h3>{{ app.versionLabel(comparison.right.id) }}</h3>
+            <ArchitecturePanel :version-id="comparison.right.id" />
+          </div>
+        </div>
+      </section>
+
+      <div v-if="comparison" class="compare-results">
         <article class="stat-card">
           <span>{{ app.t("compare", "loc_delta") }}</span>
-          <strong>{{ locDelta >= 0 ? `+${locDelta}` : locDelta }}</strong>
+          <strong>{{ comparison.locDelta >= 0 ? `+${comparison.locDelta}` : comparison.locDelta }}</strong>
         </article>
         <article class="stat-card">
           <span>{{ app.t("compare", "new_tools_in_b") }}</span>
-          <strong>{{ toolsOnlyRight.length }}</strong>
-          <p>{{ toolsOnlyRight.join(", ") || app.t("compare", "none") }}</p>
+          <strong>{{ comparison.toolsOnlyB.length }}</strong>
+          <p>{{ comparison.toolsOnlyB.join(", ") || app.t("compare", "none") }}</p>
         </article>
         <article class="stat-card">
           <span>{{ app.t("compare", "new_classes_in_b") }}</span>
-          <strong>{{ newClasses.length }}</strong>
-          <p>{{ newClasses.join(", ") || app.t("compare", "none") }}</p>
+          <strong>{{ comparison.newClasses.length }}</strong>
+          <p>{{ comparison.newClasses.join(", ") || app.t("compare", "none") }}</p>
         </article>
         <article class="stat-card">
           <span>{{ app.t("compare", "new_functions_in_b") }}</span>
-          <strong>{{ newFunctions.length }}</strong>
-          <p>{{ newFunctions.join(", ") || app.t("compare", "none") }}</p>
+          <strong>{{ comparison.newFunctions.length }}</strong>
+          <p>{{ comparison.newFunctions.join(", ") || app.t("compare", "none") }}</p>
         </article>
       </div>
+
+      <section v-if="comparison" class="simple-panel">
+        <h2>{{ app.t("compare", "tool_comparison") }}</h2>
+        <div class="tool-columns">
+          <article>
+            <h3>{{ app.t("compare", "only_in") }} {{ comparison.left.id }}</h3>
+            <p>{{ comparison.toolsOnlyA.join(", ") || app.t("compare", "none") }}</p>
+          </article>
+          <article>
+            <h3>{{ app.t("compare", "shared") }}</h3>
+            <p>{{ comparison.toolsShared.join(", ") || app.t("compare", "none") }}</p>
+          </article>
+          <article>
+            <h3>{{ app.t("compare", "only_in") }} {{ comparison.right.id }}</h3>
+            <p>{{ comparison.toolsOnlyB.join(", ") || app.t("compare", "none") }}</p>
+          </article>
+        </div>
+      </section>
+
+      <CodeDiffPanel
+        v-if="comparison"
+        :old-source="comparison.left.source"
+        :new-source="comparison.right.source"
+        :old-label="`${comparison.left.id} (${comparison.left.filename})`"
+        :new-label="`${comparison.right.id} (${comparison.right.filename})`"
+      />
+
+      <section v-if="!comparison" class="empty-compare">
+        <p>{{ app.t("compare", "empty_hint") }}</p>
+      </section>
     </section>
   </div>
 </template>
@@ -57,26 +130,17 @@
 import { computed, onBeforeMount } from "vue";
 import { useRoute } from "vue-router";
 import AppSidebar from "@/components/AppSidebar.vue";
+import ArchitecturePanel from "@/components/ArchitecturePanel.vue";
+import CodeDiffPanel from "@/components/CodeDiffPanel.vue";
+import LayerBadge from "@/components/LayerBadge.vue";
 import { useAppStore } from "@/stores/app";
+import { buildVersionComparison } from "@/utils/compare";
 
 const app = useAppStore();
 const route = useRoute();
 
 onBeforeMount(() => app.setLocale(String(route.params.locale || "en")));
 
-const left = computed(() => app.getVersion(app.compareA));
-const right = computed(() => app.getVersion(app.compareB));
-const locDelta = computed(() => (right.value?.loc ?? 0) - (left.value?.loc ?? 0));
-const toolsOnlyRight = computed(() => {
-  const leftTools = new Set(left.value?.tools ?? []);
-  return (right.value?.tools ?? []).filter((tool) => !leftTools.has(tool));
-});
-const newClasses = computed(() => {
-  const leftClasses = new Set((left.value?.classes ?? []).map((item) => item.name));
-  return (right.value?.classes ?? []).map((item) => item.name).filter((name) => !leftClasses.has(name));
-});
-const newFunctions = computed(() => {
-  const leftFunctions = new Set((left.value?.functions ?? []).map((item) => item.name));
-  return (right.value?.functions ?? []).map((item) => item.name).filter((name) => !leftFunctions.has(name));
-});
+const data = computed(() => ({ versions: app.allVersions, diffs: app.allDiffs }));
+const comparison = computed(() => buildVersionComparison(data.value, app.compareA, app.compareB));
 </script>

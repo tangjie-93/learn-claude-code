@@ -1,7 +1,5 @@
 import { defineStore } from "pinia";
 import { computed, ref } from "vue";
-import docs from "@/data/generated/docs.json";
-import versions from "@/data/generated/versions.json";
 import en from "@/i18n/messages/en.json";
 import zh from "@/i18n/messages/zh.json";
 import ja from "@/i18n/messages/ja.json";
@@ -9,17 +7,36 @@ import { layers, locales, versionMeta, versionOrder, type Locale } from "@/data/
 import type { DocContent, VersionIndex } from "@/types/agent-data";
 
 const messages = { en, zh, ja } as const;
-const versionIndex = versions as VersionIndex;
-const docItems = docs as DocContent[];
+const emptyVersionIndex: VersionIndex = { versions: [], diffs: [] };
+
+let courseDataPromise: Promise<void> | undefined;
 
 export const useAppStore = defineStore("app", () => {
   const locale = ref<Locale>("en");
   const isDark = ref(false);
   const compareA = ref("");
   const compareB = ref("");
+  const versionIndex = ref<VersionIndex>(emptyVersionIndex);
+  const docItems = ref<DocContent[]>([]);
+  const dataReady = ref(false);
 
-  const allVersions = computed(() => versionIndex.versions);
-  const allDiffs = computed(() => versionIndex.diffs);
+  const allVersions = computed(() => versionIndex.value.versions);
+  const allDiffs = computed(() => versionIndex.value.diffs);
+
+  async function loadCourseData() {
+    if (dataReady.value) {
+      return;
+    }
+    courseDataPromise ??= Promise.all([
+      import("@/data/generated/versions.json"),
+      import("@/data/generated/docs.json"),
+    ]).then(([versionsModule, docsModule]) => {
+      versionIndex.value = versionsModule.default as VersionIndex;
+      docItems.value = docsModule.default as DocContent[];
+      dataReady.value = true;
+    });
+    await courseDataPromise;
+  }
 
   function setLocale(next: string) {
     locale.value = locales.includes(next as Locale) ? (next as Locale) : "en";
@@ -36,13 +53,13 @@ export const useAppStore = defineStore("app", () => {
   }
 
   function getVersion(id: string) {
-    return versionIndex.versions.find((version) => version.id === id);
+    return versionIndex.value.versions.find((version) => version.id === id);
   }
 
   function getDoc(version: string) {
     return (
-      docItems.find((doc) => doc.version === version && doc.locale === locale.value) ??
-      docItems.find((doc) => doc.version === version && doc.locale === "en")
+      docItems.value.find((doc) => doc.version === version && doc.locale === locale.value) ??
+      docItems.value.find((doc) => doc.version === version && doc.locale === "en")
     );
   }
 
@@ -63,11 +80,13 @@ export const useAppStore = defineStore("app", () => {
     isDark,
     compareA,
     compareB,
+    dataReady,
     layers,
     versionMeta,
     versionOrder,
     allVersions,
     allDiffs,
+    loadCourseData,
     setLocale,
     t,
     versionLabel,

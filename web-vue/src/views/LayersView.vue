@@ -7,7 +7,11 @@
         <p>{{ app.t("layers", "subtitle") }}</p>
       </div>
       <div class="layer-list">
-        <article v-for="(layer, index) in app.layers" :key="layer.id" class="layer-block">
+        <article
+          v-for="(layer, index) in app.layers"
+          :key="layer.id"
+          :class="['layer-block', `layer-block-${layer.id}`]"
+        >
           <header>
             <span :class="['layer-dot', `layer-${layer.id}`]" />
             <div>
@@ -25,6 +29,10 @@
               <LayerBadge :layer="layer.id">{{ version }}</LayerBadge>
               <h3>{{ app.versionLabel(version) }}</h3>
               <p>{{ app.versionMeta[version].subtitle }}</p>
+              <div class="layer-card-meta">
+                <span>{{ app.getVersion(version)?.loc ?? "?" }} LOC</span>
+                <span>{{ app.getVersion(version)?.tools.length ?? "?" }} tools</span>
+              </div>
             </RouterLink>
           </div>
         </article>

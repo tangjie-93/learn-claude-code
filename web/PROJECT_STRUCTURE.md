@@ -8,7 +8,7 @@
 
 它不是纯手写静态页面，而是通过 `scripts/extract-content.ts` 在 `dev` 和 `build` 前从仓库根目录的 `s01_...` 到 `s20_...` 课程章节中抽取内容，包括：
 
-- `code.py` 源码
+- `code_openai.py` 源码
 - 多语言 `README.md`、`README.en.md`、`README.ja.md`
 - 章节图片资源
 - 代码中的 `LOC`、`tools`、`classes`、`functions`
@@ -194,7 +194,7 @@ src/app/
         ▼
 web/scripts/extract-content.ts
         │
-        ├── 读取 code.py，提取 LOC / tools / classes / functions / source
+        ├── 读取 code_openai.py，提取 LOC / tools / classes / functions / source
         ├── 读取 README.md / README.en.md / README.ja.md
         ├── 重写 Markdown 中的图片路径和章节链接
         ├── 复制 images 到 public/course-assets/
@@ -383,7 +383,7 @@ const nextConfig = {
 如果要新增一个 `s21` 版本，通常需要：
 
 1. 在仓库根目录新增章节目录，例如 `s21_xxx/`。
-2. 在该目录中提供 `code.py`。
+2. 在该目录中提供 `code_openai.py`。
 3. 提供多语言文档：
    - `README.md`
    - `README.en.md`

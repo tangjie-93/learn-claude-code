@@ -78,7 +78,7 @@ def agent_loop(messages: list) -> None:
         # 把模型这一轮输出追加到历史里。
         # 这样下一轮请求时，模型能看到自己刚才说了什么、调用了什么工具。
         content = [as_input_item(item) for item in response.output]
-        messages.append({"role": "assistant", "content": content})
+        messages.extend(content)
 
 
 if __name__ == "__main__":

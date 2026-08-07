@@ -7,17 +7,30 @@
     "dev": "vite",
     "build": "vue-tsc --noEmit && vite build",
     "preview": "vite preview",
+    "test": "vitest run",
     "test:structure": "node tests/structure.test.mjs"
   },
   "dependencies": {
     "@vitejs/plugin-vue": "^6.0.1",
+    "diff": "^8.0.3",
     "less": "^4.4.2",
     "pinia": "^3.0.4",
+    "rehype-highlight": "^7.0.2",
+    "rehype-raw": "^7.0.0",
+    "rehype-stringify": "^10.0.1",
+    "remark-gfm": "^4.0.1",
+    "remark-parse": "^11.0.0",
+    "remark-rehype": "^11.1.2",
     "typescript": "^5.9.3",
+    "unified": "^11.0.5",
     "vite": "^7.1.0",
     "vue": "^3.5.18",
     "vue-router": "^4.5.1",
+    "vitest": "^4.0.0",
     "vue-tsc": "^3.0.5"
   },
-  "devDependencies": {}
+  "devDependencies": {
+    "@vue/test-utils": "^2.4.6",
+    "jsdom": "^27.0.0"
+  }
 }
